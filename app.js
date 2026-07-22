@@ -131,7 +131,7 @@ async function loginWithPassword(event) {
     password: $('#loginPassword').value
   });
   setBusy(event.currentTarget, false);
-  if (error) return toast('E-Mail oder Passwort ist falsch.');
+  if (error) return toast(`Anmeldung fehlgeschlagen: ${error.message}`);
   toast('Erfolgreich angemeldet.');
 }
 
@@ -150,10 +150,18 @@ async function registerWithPassword(event) {
     }
   });
   setBusy(event.currentTarget, false);
-  if (error) return toast(error.message);
+  if (error) {
+    const message = error.message === 'User already registered'
+      ? 'Diese E-Mail ist schon vorhanden. Lösche das alte Konto in Supabase unter Authentication → Users und registriere dich danach neu.'
+      : error.message;
+    return toast(message);
+  }
   event.currentTarget.reset();
-  if (data.session) toast('Kundenkonto erstellt und angemeldet.');
-  else toast('Konto erstellt. Bitte E-Mail prüfen.');
+  if (data.session) {
+    toast('Kundenkonto erstellt und angemeldet.');
+  } else {
+    toast('Das Konto wurde nicht angemeldet. Prüfe, ob Confirm email wirklich ausgeschaltet ist oder ob die E-Mail schon existiert.');
+  }
 }
 
 async function socialLogin(provider) {
@@ -232,8 +240,6 @@ function closeApp() {
   appointments = [];
   $('#appView').classList.add('hidden');
   $('#authView').classList.remove('hidden');
-  pendingOtp = null;
-  $('#otpCode').value = '';
   showAuthTab('login');
 }
 
