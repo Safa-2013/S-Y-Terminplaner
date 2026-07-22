@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>Safa Yildiz Terminplaner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <main id="loginView" class="login-shell">
+    <section class="login-card">
+      <div class="logo">SY</div>
+      <p class="eyebrow">SAFA YILDIZ</p>
+      <h1>Terminplaner</h1>
+      <p class="muted">Termine für Admin, Mitarbeiter und Kunden.</p>
+      <form id="loginForm" class="stack">
+        <label>Benutzername<input id="loginUsername" required autocomplete="username" placeholder="Benutzername"></label>
+        <label>Passwort<input id="loginPassword" required type="password" autocomplete="current-password" placeholder="Passwort"></label>
+        <button class="btn primary full">Anmelden</button>
+      </form>
+      <div class="demo-box">
+        <strong>Demo-Zugänge</strong>
+        <button type="button" data-demo="admin|admin123">Admin: admin / admin123</button>
+        <button type="button" data-demo="mitarbeiter|team123">Mitarbeiter: mitarbeiter / team123</button>
+        <button type="button" data-demo="kunde|kunde123">Kunde: kunde / kunde123</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="appView" class="app hidden">
+    <aside id="sidebar" class="sidebar">
+      <div>
+        <div class="brand"><div class="logo small">SY</div><div><strong>Safa Yildiz</strong><span>Terminplaner</span></div></div>
+        <nav id="navMenu"></nav>
+      </div>
+      <button id="logoutBtn" class="btn ghost full">Abmelden</button>
+    </aside>
+    <section class="main">
+      <header class="topbar">
+        <button id="menuBtn" class="menu-btn" aria-label="Menü">☰</button>
+        <div><p id="pageEyebrow" class="eyebrow">ÜBERSICHT</p><h2 id="pageTitle">Dashboard</h2></div>
+        <div class="user-chip"><span id="userAvatar">A</span><div><strong id="userName"></strong><small id="userRole"></small></div></div>
+      </header>
+      <div id="pageContent" class="page-content"></div>
+    </section>
+  </div>
+
+  <dialog id="appointmentDialog" class="modal">
+    <form id="appointmentForm" class="modal-card">
+      <div class="modal-head"><div><p class="eyebrow">TERMIN</p><h3 id="appointmentDialogTitle">Termin eintragen</h3></div><button type="button" class="x" data-close="appointmentDialog">×</button></div>
+      <input id="appointmentId" type="hidden">
+      <div class="form-grid">
+        <label>Kunde<select id="appointmentCustomer" required></select></label>
+        <label>Mitarbeiter<select id="appointmentEmployee" required></select></label>
+        <label>Leistung<select id="appointmentService" required></select></label>
+        <label>Datum<input id="appointmentDate" type="date" required></label>
+        <label>Uhrzeit<input id="appointmentTime" type="time" min="08:00" max="20:00" required></label>
+        <label id="statusWrap">Status<select id="appointmentStatus"><option value="angefragt">Angefragt</option><option value="bestaetigt">Bestätigt</option><option value="abgelehnt">Abgelehnt</option><option value="erledigt">Erledigt</option><option value="abgesagt">Abgesagt</option></select></label>
+      </div>
+      <label>Notiz<textarea id="appointmentNote" rows="3" placeholder="Optionale Notiz"></textarea></label>
+      <div class="actions"><button type="button" class="btn ghost" data-close="appointmentDialog">Abbrechen</button><button class="btn primary">Speichern</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="userDialog" class="modal">
+    <form id="userForm" class="modal-card compact">
+      <div class="modal-head"><div><p class="eyebrow">KONTO</p><h3>Benutzer erstellen</h3></div><button type="button" class="x" data-close="userDialog">×</button></div>
+      <label>Name<input id="newUserName" required></label>
+      <label>Benutzername<input id="newUsername" required></label>
+      <label>Passwort<input id="newUserPassword" required></label>
+      <label>Rolle<select id="newUserRole"><option value="mitarbeiter">Mitarbeiter</option><option value="kunde">Kunde</option></select></label>
+      <div class="actions"><button type="button" class="btn ghost" data-close="userDialog">Abbrechen</button><button class="btn primary">Erstellen</button></div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
