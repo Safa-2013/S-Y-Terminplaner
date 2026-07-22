@@ -387,22 +387,66 @@ function renderRequestPage(content) {
   $('#requestAppointment').onclick = () => openAppointment();
 }
 
+function personSearchBlock(placeholder = 'Nach Name oder E-Mail suchen') {
+  return `<div class="people-search"><span aria-hidden="true">⌕</span><input id="peopleSearch" type="search" placeholder="${placeholder}" autocomplete="off"></div>`;
+}
+
+function personCard(item, adminMode = false) {
+  return `<button class="person-result" type="button" data-view-person="${item.id}">
+    <span class="person-avatar">${escapeHtml((item.full_name || item.email || '?')[0].toUpperCase())}</span>
+    <span class="person-main"><b>${escapeHtml(item.full_name || 'Ohne Name')}</b><small>${escapeHtml(item.email)}</small></span>
+    <span class="badge ${item.role}">${roleName(item.role)}</span>
+    <span class="badge ${item.active ? 'active' : 'inactive'}">${item.active ? 'Aktiv' : 'Gesperrt'}</span>
+    ${adminMode ? '<span class="person-arrow">›</span>' : ''}
+  </button>`;
+}
+
+function bindPersonSearch(source, targetId, adminMode = false) {
+  const input = $('#peopleSearch');
+  const target = $(`#${targetId}`);
+  const draw = () => {
+    const query = input.value.trim().toLowerCase();
+    const result = source.filter((item) => `${item.full_name || ''} ${item.email || ''}`.toLowerCase().includes(query));
+    target.innerHTML = result.length ? result.map((item) => personCard(item, adminMode)).join('') : '<div class="empty">Keine Person gefunden.</div>';
+    $$('[data-view-person]').forEach((button) => button.onclick = () => openPersonProfile(button.dataset.viewPerson));
+  };
+  input.addEventListener('input', draw);
+  draw();
+}
+
+function openPersonProfile(id) {
+  const item = profiles.find((profile) => profile.id === id);
+  if (!item) return toast('Profil wurde nicht gefunden.');
+  const personAppointments = appointments
+    .filter((appointment) => appointment.customer_id === id || appointment.employee_id === id)
+    .sort((a, b) => `${a.appointment_date}${a.appointment_time}`.localeCompare(`${b.appointment_date}${b.appointment_time}`));
+  $('#personDialogTitle').textContent = item.full_name || item.email;
+  $('#personDialogContent').innerHTML = `<div class="profile-summary"><div class="person-avatar large">${escapeHtml((item.full_name || item.email)[0].toUpperCase())}</div><div><h4>${escapeHtml(item.full_name || 'Ohne Name')}</h4><p>${escapeHtml(item.email)}</p></div></div>
+    <div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(item.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Rolle</span><b>${roleName(item.role)}</b></div><div class="info-row"><span>Status</span><b>${item.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${item.created_at ? new Intl.DateTimeFormat('de-DE').format(new Date(item.created_at)) : '–'}</b></div></div>
+    <div class="profile-appointments"><h4>Termine (${personAppointments.length})</h4>${personAppointments.length ? personAppointments.slice(0, 8).map((appointment) => `<div class="profile-appointment"><b>${formatDate(appointment.appointment_date)} · ${appointment.appointment_time.slice(0,5)}</b><span>${escapeHtml(serviceById(appointment.service_id).name)} · ${statusName(appointment.status)}</span></div>`).join('') : '<p class="muted">Keine Termine vorhanden.</p>'}</div>
+    ${currentProfile.role === 'admin' ? `<div class="actions person-admin-actions"><button id="editPersonFromProfile" class="btn primary" type="button">Konto bearbeiten</button>${item.id !== currentProfile.id ? '<button id="deletePersonFromProfile" class="btn danger" type="button">Konto löschen</button>' : ''}</div>` : ''}`;
+  $('#personDialog').showModal();
+  if (currentProfile.role === 'admin') {
+    $('#editPersonFromProfile').onclick = () => { $('#personDialog').close(); openUserDialog(item.id); };
+    const deleteButton = $('#deletePersonFromProfile');
+    if (deleteButton) deleteButton.onclick = async () => { $('#personDialog').close(); await deleteAdminUser(item.id); };
+  }
+}
+
 function renderUsers(content) {
   setTitle('VERWALTUNG', 'Konten verwalten');
-  const list = [...profiles].sort((a, b) => a.full_name.localeCompare(b.full_name));
-  content.innerHTML = `<div class="hero"><div><h3>Alle Konten</h3><p>Nur Administratoren können Mitarbeiterkonten erstellen und Rollen verwalten.</p></div><button id="newUser" class="btn primary">+ Konto erstellen</button></div>
-    <div class="card"><div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>E-Mail</th><th>Telefon</th><th>Rolle</th><th>Status</th><th>Aktion</th></tr></thead><tbody>
-    ${list.map((item) => `<tr><td><b>${escapeHtml(item.full_name)}</b></td><td>${escapeHtml(item.email)}</td><td>${escapeHtml(item.phone || '–')}</td><td><span class="badge ${item.role}">${roleName(item.role)}</span></td><td><span class="badge ${item.active ? 'active' : 'inactive'}">${item.active ? 'Aktiv' : 'Gesperrt'}</span></td><td><div class="row-actions"><button class="mini" data-edit-user="${item.id}">Bearbeiten</button>${item.id !== currentProfile.id ? `<button class="mini bad" data-delete-user="${item.id}">Löschen</button>` : ''}</div></td></tr>`).join('')}
-    </tbody></table></div></div>`;
+  const list = [...profiles].sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
+  content.innerHTML = `<div class="hero"><div><h3>Alle Konten</h3><p>Suche nach Name oder E-Mail und öffne das vollständige Profil.</p></div><button id="newUser" class="btn primary">+ Konto erstellen</button></div>
+    <div class="card">${personSearchBlock()}<div id="peopleResults" class="people-results"></div></div>`;
   $('#newUser').onclick = () => openUserDialog();
-  $$('[data-edit-user]').forEach((button) => button.onclick = () => openUserDialog(button.dataset.editUser));
-  $$('[data-delete-user]').forEach((button) => button.onclick = () => deleteAdminUser(button.dataset.deleteUser));
+  bindPersonSearch(list, 'peopleResults', true);
 }
 
 function renderCustomers(content) {
   setTitle('KUNDEN', 'Kundenübersicht');
-  const customers = profiles.filter((item) => item.role === 'customer');
-  content.innerHTML = `<div class="hero"><div><h3>Kunden</h3><p>Kontaktdaten der Kunden, die für die Terminverwaltung sichtbar sind.</p></div></div><div class="card"><div class="table-wrap"><table class="data-table"><thead><tr><th>Name</th><th>E-Mail</th><th>Telefon</th><th>Status</th></tr></thead><tbody>${customers.map((item) => `<tr><td><b>${escapeHtml(item.full_name)}</b></td><td>${escapeHtml(item.email)}</td><td>${escapeHtml(item.phone || '–')}</td><td><span class="badge ${item.active ? 'active' : 'inactive'}">${item.active ? 'Aktiv' : 'Gesperrt'}</span></td></tr>`).join('')}</tbody></table></div></div>`;
+  const customers = profiles.filter((item) => item.role === 'customer').sort((a,b)=>(a.full_name||'').localeCompare(b.full_name||''));
+  content.innerHTML = `<div class="hero"><div><h3>Kunden suchen</h3><p>Nach Name oder E-Mail suchen und das Kundenprofil öffnen.</p></div></div><div class="card">${personSearchBlock('Kunden nach Name oder E-Mail suchen')}<div id="peopleResults" class="people-results"></div></div>`;
+  bindPersonSearch(customers, 'peopleResults');
 }
 
 function renderServices(content) {

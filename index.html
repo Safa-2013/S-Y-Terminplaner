@@ -15,7 +15,7 @@
 
   <main id="authView" class="login-shell">
     <section class="login-card">
-      <div class="logo">SY</div>
+      <img class="brand-logo login-logo" src="logo-safa-yildiz.png" alt="Safa Yildiz Vertragsservice Logo">
       <p class="eyebrow">SAFA YILDIZ</p>
       <h1>Terminplaner</h1>
       <p class="muted">Sichere Konten für Admin, Mitarbeiter und Kunden.</p>
@@ -68,7 +68,7 @@
     <aside id="sidebar" class="sidebar">
       <div>
         <div class="brand">
-          <div class="logo small">SY</div>
+          <img class="brand-logo sidebar-logo" src="logo-safa-yildiz.png" alt="Safa Yildiz Logo">
           <div><strong>Safa Yildiz</strong><span>Terminplaner</span></div>
         </div>
         <nav id="navMenu"></nav>
@@ -183,6 +183,14 @@
         <button class="btn primary">Speichern</button>
       </div>
     </form>
+  </dialog>
+
+
+  <dialog id="personDialog" class="modal">
+    <div class="modal-card compact person-modal">
+      <div class="modal-head"><div><p class="eyebrow">PERSONENPROFIL</p><h3 id="personDialogTitle">Profil</h3></div><button type="button" class="x" data-close="personDialog">×</button></div>
+      <div id="personDialogContent"></div>
+    </div>
   </dialog>
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
