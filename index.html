@@ -8,14 +8,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=6">
 </head>
 <body>
   <div id="toast" class="toast" aria-live="polite"></div>
 
   <main id="authView" class="login-shell">
     <section class="login-card">
-      <img class="brand-logo login-logo" src="logo-safa-yildiz.png" alt="Safa Yildiz Vertragsservice Logo">
+      <img src="logo-safa-yildiz-icon.png?v=6" alt="Safa Yildiz Vertragsservice Logo" style="display:block;width:112px;height:112px;object-fit:contain;margin:0 auto 14px;border-radius:22px;background:#fff;">
       <p class="eyebrow">SAFA YILDIZ</p>
       <h1>Terminplaner</h1>
       <p class="muted">Sichere Konten für Admin, Mitarbeiter und Kunden.</p>
@@ -31,8 +31,8 @@
       </div>
 
       <form id="loginForm" class="stack">
-        <label>E-Mail
-          <input id="loginEmail" required type="email" autocomplete="email" placeholder="name@beispiel.de">
+        <label>E-Mail oder Benutzername
+          <input id="loginEmail" required type="text" autocomplete="username" placeholder="name@beispiel.de oder benutzername">
         </label>
         <label>Passwort
           <input id="loginPassword" required type="password" autocomplete="current-password" placeholder="Passwort">
@@ -45,7 +45,7 @@
         <label>Vollständiger Name
           <input id="registerName" required autocomplete="name" placeholder="Vorname Nachname">
         </label>
-        <label>Telefon
+        <label>Telefon <span class="optional">(optional)</span>
           <input id="registerPhone" type="tel" autocomplete="tel" placeholder="Optional">
         </label>
         <label>E-Mail
@@ -68,7 +68,7 @@
     <aside id="sidebar" class="sidebar">
       <div>
         <div class="brand">
-          <img class="brand-logo sidebar-logo" src="logo-safa-yildiz.png" alt="Safa Yildiz Logo">
+          <img src="logo-safa-yildiz-icon.png?v=6" alt="Safa Yildiz Logo" style="display:block;width:46px;height:46px;object-fit:contain;border-radius:12px;background:#fff;flex:none;">
           <div><strong>Safa Yildiz</strong><span>Terminplaner</span></div>
         </div>
         <nav id="navMenu"></nav>
@@ -132,8 +132,10 @@
       </div>
       <input id="editUserId" type="hidden">
       <label>Name<input id="newUserName" required autocomplete="off"></label>
-      <label>Telefon<input id="newUserPhone" type="tel" autocomplete="off"></label>
-      <label>E-Mail<input id="newUserEmail" required type="email" autocomplete="off"></label>
+      <label id="usernameLabel">Benutzername<input id="newUsername" autocomplete="off" placeholder="z. B. yusuf"></label>
+      <p id="usernameHint" class="field-hint">Mit diesem Benutzernamen kann sich die Person später anmelden.</p>
+      <label>Telefon <span class="optional">(optional)</span><input id="newUserPhone" type="tel" autocomplete="off" placeholder="Kann leer bleiben"></label>
+      <label>Kontakt-E-Mail <span class="optional">(optional)</span><input id="newUserEmail" type="email" autocomplete="off" placeholder="Kann leer bleiben"></label>
       <label id="passwordLabel">Startpasswort<input id="newUserPassword" type="password" minlength="8" autocomplete="new-password"></label>
       <label>Rolle
         <select id="newUserRole">
@@ -195,6 +197,6 @@
 
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script src="app.js"></script>
+  <script src="app.js?v=4"></script>
 </body>
 </html>

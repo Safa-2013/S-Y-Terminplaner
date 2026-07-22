@@ -46,6 +46,28 @@ const escapeHtml = (value = '') => String(value)
   .replaceAll('"', '&quot;')
   .replaceAll("'", '&#039;');
 
+const INTERNAL_ACCOUNT_DOMAIN = 'konto.s-y-terminplaner.de';
+function normalizeUsername(value = '') {
+  return String(value).trim().toLowerCase()
+    .replaceAll('ä', 'ae').replaceAll('ö', 'oe').replaceAll('ü', 'ue').replaceAll('ß', 'ss')
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9._-]/g, '')
+    .replace(/^[._-]+|[._-]+$/g, '');
+}
+function internalEmailForUsername(username) {
+  return `${normalizeUsername(username)}@${INTERNAL_ACCOUNT_DOMAIN}`;
+}
+function loginIdentifierToEmail(value) {
+  const input = String(value || '').trim().toLowerCase();
+  return input.includes('@') ? input : internalEmailForUsername(input);
+}
+function isInternalEmail(value = '') {
+  return String(value).toLowerCase().endsWith(`@${INTERNAL_ACCOUNT_DOMAIN}`);
+}
+function visibleEmail(value = '') {
+  return !value || isInternalEmail(value) ? 'Nicht angegeben' : value;
+}
+
 function toast(message) {
   const box = $('#toast');
   box.textContent = message;
@@ -127,7 +149,7 @@ async function loginWithPassword(event) {
   if (!configReady) return toast('Supabase ist noch nicht verbunden.');
   setBusy(event.currentTarget, true);
   const { error } = await sb.auth.signInWithPassword({
-    email: $('#loginEmail').value.trim(),
+    email: loginIdentifierToEmail($('#loginEmail').value),
     password: $('#loginPassword').value
   });
   setBusy(event.currentTarget, false);
@@ -394,7 +416,7 @@ function personSearchBlock(placeholder = 'Nach Name oder E-Mail suchen') {
 function personCard(item, adminMode = false) {
   return `<button class="person-result" type="button" data-view-person="${item.id}">
     <span class="person-avatar">${escapeHtml((item.full_name || item.email || '?')[0].toUpperCase())}</span>
-    <span class="person-main"><b>${escapeHtml(item.full_name || 'Ohne Name')}</b><small>${escapeHtml(item.email)}</small></span>
+    <span class="person-main"><b>${escapeHtml(item.full_name || 'Ohne Name')}</b><small>${escapeHtml(visibleEmail(item.email))}</small></span>
     <span class="badge ${item.role}">${roleName(item.role)}</span>
     <span class="badge ${item.active ? 'active' : 'inactive'}">${item.active ? 'Aktiv' : 'Gesperrt'}</span>
     ${adminMode ? '<span class="person-arrow">›</span>' : ''}
@@ -421,7 +443,7 @@ function openPersonProfile(id) {
     .filter((appointment) => appointment.customer_id === id || appointment.employee_id === id)
     .sort((a, b) => `${a.appointment_date}${a.appointment_time}`.localeCompare(`${b.appointment_date}${b.appointment_time}`));
   $('#personDialogTitle').textContent = item.full_name || item.email;
-  $('#personDialogContent').innerHTML = `<div class="profile-summary"><div class="person-avatar large">${escapeHtml((item.full_name || item.email)[0].toUpperCase())}</div><div><h4>${escapeHtml(item.full_name || 'Ohne Name')}</h4><p>${escapeHtml(item.email)}</p></div></div>
+  $('#personDialogContent').innerHTML = `<div class="profile-summary"><div class="person-avatar large">${escapeHtml((item.full_name || item.email)[0].toUpperCase())}</div><div><h4>${escapeHtml(item.full_name || 'Ohne Name')}</h4><p>${escapeHtml(visibleEmail(item.email))}</p></div></div>
     <div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(item.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Rolle</span><b>${roleName(item.role)}</b></div><div class="info-row"><span>Status</span><b>${item.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${item.created_at ? new Intl.DateTimeFormat('de-DE').format(new Date(item.created_at)) : '–'}</b></div></div>
     <div class="profile-appointments"><h4>Termine (${personAppointments.length})</h4>${personAppointments.length ? personAppointments.slice(0, 8).map((appointment) => `<div class="profile-appointment"><b>${formatDate(appointment.appointment_date)} · ${appointment.appointment_time.slice(0,5)}</b><span>${escapeHtml(serviceById(appointment.service_id).name)} · ${statusName(appointment.status)}</span></div>`).join('') : '<p class="muted">Keine Termine vorhanden.</p>'}</div>
     ${currentProfile.role === 'admin' ? `<div class="actions person-admin-actions"><button id="editPersonFromProfile" class="btn primary" type="button">Konto bearbeiten</button>${item.id !== currentProfile.id ? '<button id="deletePersonFromProfile" class="btn danger" type="button">Konto löschen</button>' : ''}</div>` : ''}`;
@@ -459,7 +481,7 @@ function renderServices(content) {
 
 function renderProfile(content) {
   setTitle('KONTO', 'Mein Profil');
-  content.innerHTML = `<div class="two-col"><div class="card profile-card"><div class="user-big">${escapeHtml((currentProfile.full_name || currentProfile.email)[0].toUpperCase())}</div><h3>${escapeHtml(currentProfile.full_name)}</h3><p class="muted">${escapeHtml(currentProfile.email)}</p><span class="badge ${currentProfile.role}">${roleName(currentProfile.role)}</span><div style="margin-top:18px"><button id="editOwnProfile" class="btn primary">Daten bearbeiten</button></div></div><div class="card"><h3>Kontoinformationen</h3><div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(currentProfile.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Status</span><b>${currentProfile.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${new Intl.DateTimeFormat('de-DE').format(new Date(currentProfile.created_at))}</b></div></div></div></div>`;
+  content.innerHTML = `<div class="two-col"><div class="card profile-card"><div class="user-big">${escapeHtml((currentProfile.full_name || currentProfile.email)[0].toUpperCase())}</div><h3>${escapeHtml(currentProfile.full_name)}</h3><p class="muted">${escapeHtml(visibleEmail(currentProfile.email))}</p><span class="badge ${currentProfile.role}">${roleName(currentProfile.role)}</span><div style="margin-top:18px"><button id="editOwnProfile" class="btn primary">Daten bearbeiten</button></div></div><div class="card"><h3>Kontoinformationen</h3><div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(currentProfile.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Status</span><b>${currentProfile.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${new Intl.DateTimeFormat('de-DE').format(new Date(currentProfile.created_at))}</b></div></div></div></div>`;
   $('#editOwnProfile').onclick = () => {
     $('#profileName').value = currentProfile.full_name || '';
     $('#profilePhone').value = currentProfile.phone || '';
@@ -469,7 +491,7 @@ function renderProfile(content) {
 
 function fillAppointmentForm(item = null) {
   const customers = profiles.filter((profile) => profile.role === 'customer' && profile.active);
-  const employees = profiles.filter((profile) => profile.role === 'employee' && profile.active);
+  const employees = profiles.filter((profile) => ['employee', 'admin'].includes(profile.role) && profile.active);
   const activeServices = services.filter((service) => service.active || service.id === item?.service_id);
 
   $('#appointmentCustomer').innerHTML = customers.map((profile) => `<option value="${profile.id}">${escapeHtml(profile.full_name)}</option>`).join('');
@@ -478,7 +500,7 @@ function fillAppointmentForm(item = null) {
 
   $('#appointmentId').value = item?.id || '';
   $('#appointmentCustomer').value = item?.customer_id || (currentProfile.role === 'customer' ? currentProfile.id : customers[0]?.id || '');
-  $('#appointmentEmployee').value = item?.employee_id || (currentProfile.role === 'employee' ? currentProfile.id : employees[0]?.id || '');
+  $('#appointmentEmployee').value = item?.employee_id || (['employee', 'admin'].includes(currentProfile.role) ? currentProfile.id : employees[0]?.id || '');
   $('#appointmentService').value = item?.service_id || activeServices[0]?.id || '';
   $('#appointmentDate').value = item?.appointment_date || addDays(1);
   $('#appointmentTime').value = item?.appointment_time?.slice(0, 5) || '10:00';
@@ -510,6 +532,10 @@ async function saveAppointment(event) {
     status: currentProfile.role === 'customer' ? 'requested' : $('#appointmentStatus').value,
     note: $('#appointmentNote').value.trim()
   };
+
+  if (!payload.customer_id) { setBusy(event.currentTarget, false); return toast('Bitte zuerst ein Kundenkonto auswählen oder erstellen.'); }
+  if (!payload.employee_id) { setBusy(event.currentTarget, false); return toast('Bitte einen Mitarbeiter oder Administrator auswählen.'); }
+  if (!payload.service_id) { setBusy(event.currentTarget, false); return toast('Bitte zuerst eine Leistung anlegen.'); }
 
   const conflictQuery = sb.from('appointments').select('id').eq('employee_id', payload.employee_id).eq('appointment_date', payload.appointment_date).eq('appointment_time', payload.appointment_time).not('status', 'in', '(rejected,cancelled)');
   const { data: conflicts } = id ? await conflictQuery.neq('id', id) : await conflictQuery;
@@ -553,8 +579,13 @@ function openUserDialog(id = null) {
   $('#userDialogTitle').textContent = item ? 'Konto bearbeiten' : 'Konto erstellen';
   $('#editUserId').value = item?.id || '';
   $('#newUserName').value = item?.full_name || '';
+  $('#newUsername').value = item && isInternalEmail(item.email) ? item.email.split('@')[0] : '';
+  $('#newUsername').required = !item;
+  $('#newUsername').disabled = Boolean(item);
+  $('#usernameLabel').classList.toggle('hidden', Boolean(item));
+  $('#usernameHint').classList.toggle('hidden', Boolean(item));
   $('#newUserPhone').value = item?.phone || '';
-  $('#newUserEmail').value = item?.email || '';
+  $('#newUserEmail').value = item ? (isInternalEmail(item.email) ? '' : item.email || '') : '';
   $('#newUserPassword').value = '';
   $('#newUserPassword').required = !item;
   $('#passwordLabel').firstChild.textContent = item ? 'Neues Passwort (optional)' : 'Startpasswort';
@@ -571,13 +602,59 @@ async function invokeAdminUsers(body) {
   return data;
 }
 
+async function createAdminManagedAccount(body) {
+  const username = normalizeUsername(body.username);
+  if (username.length < 3) throw new Error('Der Benutzername muss mindestens 3 Zeichen lang sein.');
+  const authEmail = internalEmailForUsername(username);
+  const isolated = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY, {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+  });
+  const { data, error } = await isolated.auth.signUp({
+    email: authEmail,
+    password: body.password,
+    options: { data: { full_name: body.full_name, phone: body.phone, username } }
+  });
+  if (error) throw error;
+  if (!data?.user || data.user.identities?.length === 0) {
+    throw new Error('Dieser Benutzername ist bereits vergeben.');
+  }
+  const { error: profileError } = await sb.rpc('admin_configure_account', {
+    p_user_id: data.user.id,
+    p_full_name: body.full_name,
+    p_phone: body.phone || '',
+    p_contact_email: body.email || '',
+    p_role: body.role,
+    p_active: true
+  });
+  if (profileError) throw new Error(`${profileError.message} – führe zuerst die Datei supabase-update.sql im SQL Editor aus.`);
+}
+
+async function updateAdminManagedAccount(body) {
+  const { error } = await sb.rpc('admin_configure_account', {
+    p_user_id: body.id,
+    p_full_name: body.full_name,
+    p_phone: body.phone || '',
+    p_contact_email: body.email || '',
+    p_role: body.role,
+    p_active: body.active
+  });
+  if (error) throw new Error(`${error.message} – führe zuerst die Datei supabase-update.sql im SQL Editor aus.`);
+  if (body.password) {
+    try {
+      await invokeAdminUsers({ action: 'update', id: body.id, password: body.password });
+    } catch (_) {
+      toast('Profildaten gespeichert. Das Passwort konnte ohne die optionale Admin-Funktion nicht geändert werden.');
+    }
+  }
+}
+
 async function saveAdminUser(event) {
   event.preventDefault();
   setBusy(event.currentTarget, true);
   const id = $('#editUserId').value;
   const body = {
-    action: id ? 'update' : 'create',
     id: id || undefined,
+    username: $('#newUsername').value.trim(),
     full_name: $('#newUserName').value.trim(),
     phone: $('#newUserPhone').value.trim(),
     email: $('#newUserEmail').value.trim(),
@@ -587,9 +664,10 @@ async function saveAdminUser(event) {
   };
 
   try {
-    await invokeAdminUsers(body);
+    if (id) await updateAdminManagedAccount(body);
+    else await createAdminManagedAccount(body);
     $('#userDialog').close();
-    await reloadAndRender(id ? 'Konto wurde aktualisiert.' : 'Konto wurde erstellt.');
+    await reloadAndRender(id ? 'Konto wurde aktualisiert.' : 'Konto wurde erstellt. Die Anmeldung erfolgt mit Benutzername und Startpasswort.');
   } catch (error) {
     toast(error.message);
   } finally {
@@ -599,13 +677,17 @@ async function saveAdminUser(event) {
 
 async function deleteAdminUser(id) {
   const item = profiles.find((profile) => profile.id === id);
-  if (!confirm(`Konto von ${item?.full_name || 'diesem Benutzer'} endgültig löschen?`)) return;
-  try {
-    await invokeAdminUsers({ action: 'delete', id });
-    await reloadAndRender('Konto wurde gelöscht.');
-  } catch (error) {
-    toast(error.message);
-  }
+  if (!confirm(`Konto von ${item?.full_name || 'diesem Benutzer'} sperren? Die Person kann sich danach nicht mehr anmelden.`)) return;
+  const { error } = await sb.rpc('admin_configure_account', {
+    p_user_id: id,
+    p_full_name: item?.full_name || '',
+    p_phone: item?.phone || '',
+    p_contact_email: isInternalEmail(item?.email) ? '' : item?.email || '',
+    p_role: item?.role || 'customer',
+    p_active: false
+  });
+  if (error) return toast(`${error.message} – führe zuerst supabase-update.sql aus.`);
+  await reloadAndRender('Konto wurde gesperrt.');
 }
 
 function openServiceDialog(id = null) {
