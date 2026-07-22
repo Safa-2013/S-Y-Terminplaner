@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f172a">
+  <title>S-Y Terminplaner</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <main id="authView" class="login-shell">
+    <section class="login-card">
+      <div class="logo">SY</div>
+      <p class="eyebrow">SAFA YILDIZ</p>
+      <h1>Terminplaner</h1>
+      <p class="muted">Sichere Konten für Admin, Mitarbeiter und Kunden.</p>
+
+      <div id="setupWarning" class="setup-warning hidden">
+        <strong>Supabase ist noch nicht verbunden.</strong>
+        <span>Öffne zuerst <code>config.js</code> und trage deine Projektdaten ein.</span>
+      </div>
+
+      <div class="auth-tabs">
+        <button id="showLogin" class="active" type="button">Anmelden</button>
+        <button id="showRegister" type="button">Kundenkonto erstellen</button>
+      </div>
+
+      <form id="loginForm" class="stack">
+        <label>E-Mail
+          <input id="loginEmail" required type="email" autocomplete="email" placeholder="name@beispiel.de">
+        </label>
+        <label>Passwort
+          <input id="loginPassword" required type="password" autocomplete="current-password" placeholder="Passwort">
+        </label>
+        <button class="btn primary full">Anmelden</button>
+        <button id="forgotPassword" class="link-btn" type="button">Passwort vergessen?</button>
+      </form>
+
+      <form id="registerForm" class="stack hidden">
+        <div class="note">Hier können sich nur Kunden registrieren. Mitarbeiterkonten erstellt ausschließlich der Admin.</div>
+        <label>Vollständiger Name
+          <input id="registerName" required autocomplete="name" placeholder="Vorname Nachname">
+        </label>
+        <label>Telefon
+          <input id="registerPhone" type="tel" autocomplete="tel" placeholder="Optional">
+        </label>
+        <label>E-Mail
+          <input id="registerEmail" required type="email" autocomplete="email" placeholder="name@beispiel.de">
+        </label>
+        <label>Passwort
+          <input id="registerPassword" required type="password" minlength="8" autocomplete="new-password" placeholder="Mindestens 8 Zeichen">
+        </label>
+        <button class="btn primary full">Kundenkonto erstellen</button>
+      </form>
+    </section>
+  </main>
+
+  <div id="appView" class="app hidden">
+    <aside id="sidebar" class="sidebar">
+      <div>
+        <div class="brand">
+          <div class="logo small">SY</div>
+          <div><strong>Safa Yildiz</strong><span>Terminplaner</span></div>
+        </div>
+        <nav id="navMenu"></nav>
+      </div>
+      <button id="logoutBtn" class="btn ghost full">Abmelden</button>
+    </aside>
+
+    <section class="main">
+      <header class="topbar">
+        <button id="menuBtn" class="menu-btn" aria-label="Menü">☰</button>
+        <div class="page-title-wrap">
+          <p id="pageEyebrow" class="eyebrow">ÜBERSICHT</p>
+          <h2 id="pageTitle">Dashboard</h2>
+        </div>
+        <div class="user-chip">
+          <span id="userAvatar">A</span>
+          <div><strong id="userName"></strong><small id="userRole"></small></div>
+        </div>
+      </header>
+      <div id="pageContent" class="page-content"></div>
+    </section>
+  </div>
+
+  <dialog id="appointmentDialog" class="modal">
+    <form id="appointmentForm" class="modal-card">
+      <div class="modal-head">
+        <div><p class="eyebrow">TERMIN</p><h3 id="appointmentDialogTitle">Termin eintragen</h3></div>
+        <button type="button" class="x" data-close="appointmentDialog">×</button>
+      </div>
+      <input id="appointmentId" type="hidden">
+      <div class="form-grid">
+        <label>Kunde<select id="appointmentCustomer" required></select></label>
+        <label>Mitarbeiter<select id="appointmentEmployee" required></select></label>
+        <label>Leistung<select id="appointmentService" required></select></label>
+        <label>Datum<input id="appointmentDate" type="date" required></label>
+        <label>Uhrzeit<input id="appointmentTime" type="time" min="08:00" max="20:00" required></label>
+        <label id="statusWrap">Status
+          <select id="appointmentStatus">
+            <option value="requested">Angefragt</option>
+            <option value="confirmed">Bestätigt</option>
+            <option value="rejected">Abgelehnt</option>
+            <option value="completed">Erledigt</option>
+            <option value="cancelled">Abgesagt</option>
+            <option value="no_show">Nicht erschienen</option>
+          </select>
+        </label>
+      </div>
+      <label>Notiz<textarea id="appointmentNote" rows="3" placeholder="Optionale Notiz"></textarea></label>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close="appointmentDialog">Abbrechen</button>
+        <button class="btn primary">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="userDialog" class="modal">
+    <form id="userForm" class="modal-card compact">
+      <div class="modal-head">
+        <div><p class="eyebrow">KONTO</p><h3 id="userDialogTitle">Benutzer erstellen</h3></div>
+        <button type="button" class="x" data-close="userDialog">×</button>
+      </div>
+      <input id="editUserId" type="hidden">
+      <label>Name<input id="newUserName" required autocomplete="off"></label>
+      <label>Telefon<input id="newUserPhone" type="tel" autocomplete="off"></label>
+      <label>E-Mail<input id="newUserEmail" required type="email" autocomplete="off"></label>
+      <label id="passwordLabel">Startpasswort<input id="newUserPassword" type="password" minlength="8" autocomplete="new-password"></label>
+      <label>Rolle
+        <select id="newUserRole">
+          <option value="employee">Mitarbeiter</option>
+          <option value="customer">Kunde</option>
+          <option value="admin">Administrator</option>
+        </select>
+      </label>
+      <label id="activeWrap" class="check-row hidden">
+        <input id="newUserActive" type="checkbox" checked>
+        <span>Konto aktiv</span>
+      </label>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close="userDialog">Abbrechen</button>
+        <button class="btn primary">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="serviceDialog" class="modal">
+    <form id="serviceForm" class="modal-card compact">
+      <div class="modal-head">
+        <div><p class="eyebrow">LEISTUNG</p><h3 id="serviceDialogTitle">Leistung erstellen</h3></div>
+        <button type="button" class="x" data-close="serviceDialog">×</button>
+      </div>
+      <input id="serviceId" type="hidden">
+      <label>Name<input id="serviceName" required></label>
+      <label>Dauer in Minuten<input id="serviceDuration" required type="number" min="5" max="480" step="5"></label>
+      <label class="check-row"><input id="serviceActive" type="checkbox" checked><span>Aktiv</span></label>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close="serviceDialog">Abbrechen</button>
+        <button class="btn primary">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="profileDialog" class="modal">
+    <form id="profileForm" class="modal-card compact">
+      <div class="modal-head">
+        <div><p class="eyebrow">PROFIL</p><h3>Eigene Daten bearbeiten</h3></div>
+        <button type="button" class="x" data-close="profileDialog">×</button>
+      </div>
+      <label>Name<input id="profileName" required></label>
+      <label>Telefon<input id="profilePhone" type="tel"></label>
+      <div class="actions">
+        <button type="button" class="btn ghost" data-close="profileDialog">Abbrechen</button>
+        <button class="btn primary">Speichern</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
