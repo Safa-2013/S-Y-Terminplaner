@@ -78,7 +78,18 @@ function toast(message) {
 
 function setBusy(form, busy) {
   const button = form.querySelector('button[type="submit"], button:not([type])');
-  if (button) button.disabled = busy;
+  if (button) {
+    button.disabled = busy;
+    if (!button.dataset.originalText) button.dataset.originalText = button.textContent;
+    button.textContent = busy ? 'Bitte warten …' : button.dataset.originalText;
+  }
+}
+
+function withTimeout(promise, milliseconds = 15000) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Die Verbindung dauert zu lange. Bitte prüfe dein Internet und versuche es erneut.')), milliseconds))
+  ]);
 }
 
 function profileById(id) {
@@ -521,7 +532,8 @@ function openAppointment(id = null) {
 
 async function saveAppointment(event) {
   event.preventDefault();
-  setBusy(event.currentTarget, true);
+  const form = event.currentTarget;
+  setBusy(form, true);
   const id = $('#appointmentId').value;
   const payload = {
     customer_id: currentProfile.role === 'customer' ? currentProfile.id : $('#appointmentCustomer').value,
@@ -533,25 +545,42 @@ async function saveAppointment(event) {
     note: $('#appointmentNote').value.trim()
   };
 
-  if (!payload.customer_id) { setBusy(event.currentTarget, false); return toast('Bitte zuerst ein Kundenkonto auswählen oder erstellen.'); }
-  if (!payload.employee_id) { setBusy(event.currentTarget, false); return toast('Bitte einen Mitarbeiter oder Administrator auswählen.'); }
-  if (!payload.service_id) { setBusy(event.currentTarget, false); return toast('Bitte zuerst eine Leistung anlegen.'); }
+  if (!payload.customer_id) { setBusy(form, false); return toast('Bitte zuerst ein Kundenkonto auswählen oder erstellen.'); }
+  if (!payload.employee_id) { setBusy(form, false); return toast('Bitte einen Mitarbeiter oder Administrator auswählen.'); }
+  if (!payload.service_id) { setBusy(form, false); return toast('Bitte zuerst eine Leistung anlegen.'); }
 
-  const conflictQuery = sb.from('appointments').select('id').eq('employee_id', payload.employee_id).eq('appointment_date', payload.appointment_date).eq('appointment_time', payload.appointment_time).not('status', 'in', '(rejected,cancelled)');
-  const { data: conflicts } = id ? await conflictQuery.neq('id', id) : await conflictQuery;
-  if (conflicts?.length) {
-    setBusy(event.currentTarget, false);
+  // Soforte Prüfung mit den bereits geladenen Terminen. Dadurch entfällt eine zusätzliche langsame Datenbankabfrage.
+  const conflict = appointments.some((item) =>
+    item.id !== id &&
+    item.employee_id === payload.employee_id &&
+    item.appointment_date === payload.appointment_date &&
+    item.appointment_time.slice(0, 5) === payload.appointment_time.slice(0, 5) &&
+    !['rejected', 'cancelled'].includes(item.status)
+  );
+  if (conflict) {
+    setBusy(form, false);
     return toast('Diese Uhrzeit ist bei diesem Mitarbeiter bereits belegt.');
   }
 
-  const result = id
-    ? await sb.from('appointments').update(payload).eq('id', id)
-    : await sb.from('appointments').insert(payload);
-  setBusy(event.currentTarget, false);
-  if (result.error) return toast(result.error.message);
+  try {
+    const query = id
+      ? sb.from('appointments').update(payload).eq('id', id).select('*').single()
+      : sb.from('appointments').insert(payload).select('*').single();
+    const result = await withTimeout(query, 15000);
+    if (result.error) throw result.error;
 
-  $('#appointmentDialog').close();
-  await reloadAndRender(currentProfile.role === 'customer' ? 'Anfrage wurde gesendet.' : 'Termin wurde gespeichert.');
+    if (id) appointments = appointments.map((item) => item.id === id ? result.data : item);
+    else appointments.push(result.data);
+    appointments.sort((a, b) => `${a.appointment_date}${a.appointment_time}`.localeCompare(`${b.appointment_date}${b.appointment_time}`));
+
+    $('#appointmentDialog').close();
+    renderPage();
+    toast(currentProfile.role === 'customer' ? 'Anfrage wurde sofort gesendet.' : 'Termin wurde sofort gespeichert.');
+  } catch (error) {
+    toast(error.message || 'Termin konnte nicht gespeichert werden.');
+  } finally {
+    setBusy(form, false);
+  }
 }
 
 async function setAppointmentStatus(id, status) {
@@ -609,11 +638,11 @@ async function createAdminManagedAccount(body) {
   const isolated = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY, {
     auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
   });
-  const { data, error } = await isolated.auth.signUp({
+  const { data, error } = await withTimeout(isolated.auth.signUp({
     email: authEmail,
     password: body.password,
-    options: { data: { full_name: body.full_name, phone: body.phone, username } }
-  });
+    options: { data: { full_name: body.full_name, phone: body.phone, username, admin_created: true } }
+  }), 15000);
   if (error) throw error;
   if (!data?.user || data.user.identities?.length === 0) {
     throw new Error('Dieser Benutzername ist bereits vergeben.');
