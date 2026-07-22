@@ -26,19 +26,16 @@
       </div>
 
       <div class="auth-tabs">
-        <button id="showLogin" class="active" type="button">Anmelden</button>
+        <button id="showLogin" class="active" type="button">Mit E-Mail-Code anmelden</button>
         <button id="showRegister" type="button">Kundenkonto erstellen</button>
       </div>
 
       <form id="loginForm" class="stack">
+        <div class="note">Du erhältst einen 6-stelligen Anmeldecode per E-Mail. Ein Passwort ist nicht nötig.</div>
         <label>E-Mail
           <input id="loginEmail" required type="email" autocomplete="email" placeholder="name@beispiel.de">
         </label>
-        <label>Passwort
-          <input id="loginPassword" required type="password" autocomplete="current-password" placeholder="Passwort">
-        </label>
-        <button class="btn primary full">Anmelden</button>
-        <button id="forgotPassword" class="link-btn" type="button">Passwort vergessen?</button>
+        <button class="btn primary full">Code senden</button>
       </form>
 
       <form id="registerForm" class="stack hidden">
@@ -52,11 +49,29 @@
         <label>E-Mail
           <input id="registerEmail" required type="email" autocomplete="email" placeholder="name@beispiel.de">
         </label>
-        <label>Passwort
-          <input id="registerPassword" required type="password" minlength="8" autocomplete="new-password" placeholder="Mindestens 8 Zeichen">
-        </label>
-        <button class="btn primary full">Kundenkonto erstellen</button>
+        <button class="btn primary full">Konto erstellen und Code senden</button>
       </form>
+
+      <form id="otpForm" class="stack hidden">
+        <div class="otp-info">
+          <strong>Code eingeben</strong>
+          <span>Wir haben einen 6-stelligen Code an <b id="otpEmailLabel"></b> gesendet.</span>
+        </div>
+        <label>Bestätigungscode
+          <input id="otpCode" required inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="123456">
+        </label>
+        <button class="btn primary full">Code bestätigen</button>
+        <div class="otp-actions">
+          <button id="resendOtp" class="link-btn" type="button">Code erneut senden</button>
+          <button id="backToEmail" class="link-btn" type="button">Andere E-Mail verwenden</button>
+        </div>
+      </form>
+
+      <div class="social-separator"><span>oder</span></div>
+      <div class="social-buttons">
+        <button id="googleLogin" class="social-btn" type="button"><span class="social-icon google-icon">G</span>Mit Google anmelden</button>
+        <button id="appleLogin" class="social-btn apple" type="button"><span class="social-icon apple-icon">●</span>Mit Apple anmelden</button>
+      </div>
     </section>
   </main>
 

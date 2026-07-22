@@ -16,6 +16,7 @@ let profiles = [];
 let services = [];
 let appointments = [];
 let currentPage = 'dashboard';
+let pendingOtp = null;
 
 const today = new Date();
 const iso = (date) => {
@@ -76,8 +77,20 @@ function showAuthTab(tab) {
   const login = tab === 'login';
   $('#loginForm').classList.toggle('hidden', !login);
   $('#registerForm').classList.toggle('hidden', login);
+  $('#otpForm').classList.add('hidden');
   $('#showLogin').classList.toggle('active', login);
   $('#showRegister').classList.toggle('active', !login);
+}
+
+function showOtpStep() {
+  $('#loginForm').classList.add('hidden');
+  $('#registerForm').classList.add('hidden');
+  $('#otpForm').classList.remove('hidden');
+  $('#showLogin').classList.remove('active');
+  $('#showRegister').classList.remove('active');
+  $('#otpEmailLabel').textContent = pendingOtp?.email || '';
+  $('#otpCode').value = '';
+  setTimeout(() => $('#otpCode').focus(), 50);
 }
 
 async function init() {
@@ -113,64 +126,102 @@ function bindStaticEvents() {
     button.onclick = () => $(`#${button.dataset.close}`).close();
   });
 
-  $('#loginForm').addEventListener('submit', login);
-  $('#registerForm').addEventListener('submit', registerCustomer);
-  $('#forgotPassword').onclick = forgotPassword;
+  $('#loginForm').addEventListener('submit', requestLoginCode);
+  $('#registerForm').addEventListener('submit', requestRegistrationCode);
+  $('#otpForm').addEventListener('submit', verifyEmailCode);
+  $('#resendOtp').onclick = resendEmailCode;
+  $('#backToEmail').onclick = () => showAuthTab(pendingOtp?.mode === 'register' ? 'register' : 'login');
+  $('#googleLogin').onclick = () => socialLogin('google');
+  $('#appleLogin').onclick = () => socialLogin('apple');
   $('#appointmentForm').addEventListener('submit', saveAppointment);
   $('#userForm').addEventListener('submit', saveAdminUser);
   $('#serviceForm').addEventListener('submit', saveService);
   $('#profileForm').addEventListener('submit', saveOwnProfile);
 }
 
-async function login(event) {
-  event.preventDefault();
+async function sendEmailCode({ email, mode, metadata = null, resend = false }) {
   if (!configReady) return toast('Supabase ist noch nicht verbunden.');
-  setBusy(event.currentTarget, true);
-  const { error } = await sb.auth.signInWithPassword({
-    email: $('#loginEmail').value.trim(),
-    password: $('#loginPassword').value
-  });
-  setBusy(event.currentTarget, false);
-  if (error) toast(error.message === 'Invalid login credentials' ? 'E-Mail oder Passwort ist falsch.' : error.message);
-}
+  const options = {
+    shouldCreateUser: mode === 'register',
+    emailRedirectTo: `${location.origin}${location.pathname}`
+  };
+  if (metadata) options.data = metadata;
 
-async function registerCustomer(event) {
-  event.preventDefault();
-  if (!configReady) return toast('Supabase ist noch nicht verbunden.');
-  setBusy(event.currentTarget, true);
-
-  const { data, error } = await sb.auth.signUp({
-    email: $('#registerEmail').value.trim(),
-    password: $('#registerPassword').value,
-    options: {
-      data: {
-        full_name: $('#registerName').value.trim(),
-        phone: $('#registerPhone').value.trim()
-      },
-      emailRedirectTo: `${location.origin}${location.pathname}`
-    }
-  });
-
-  setBusy(event.currentTarget, false);
-  if (error) return toast(error.message);
-
-  event.currentTarget.reset();
-  if (data.session) {
-    toast('Kundenkonto wurde erstellt.');
-  } else {
-    toast('Konto erstellt. Bitte bestätige jetzt die E-Mail.');
-    showAuthTab('login');
+  const { error } = await sb.auth.signInWithOtp({ email, options });
+  if (error) {
+    const message = error.message?.toLowerCase().includes('signups not allowed')
+      ? 'Zu dieser E-Mail gibt es noch kein Konto. Bitte zuerst ein Kundenkonto erstellen.'
+      : error.message;
+    toast(message);
+    return false;
   }
+
+  pendingOtp = { email, mode, metadata };
+  showOtpStep();
+  toast(resend ? 'Ein neuer Code wurde gesendet.' : 'Der 6-stellige Code wurde per E-Mail gesendet.');
+  return true;
 }
 
-async function forgotPassword() {
-  if (!configReady) return toast('Supabase ist noch nicht verbunden.');
-  const email = $('#loginEmail').value.trim() || prompt('Welche E-Mail-Adresse gehört zu deinem Konto?');
-  if (!email) return;
-  const { error } = await sb.auth.resetPasswordForEmail(email, {
-    redirectTo: `${location.origin}${location.pathname}`
+async function requestLoginCode(event) {
+  event.preventDefault();
+  setBusy(event.currentTarget, true);
+  await sendEmailCode({
+    email: $('#loginEmail').value.trim(),
+    mode: 'login'
   });
-  toast(error ? error.message : 'Link zum Zurücksetzen wurde gesendet.');
+  setBusy(event.currentTarget, false);
+}
+
+async function requestRegistrationCode(event) {
+  event.preventDefault();
+  setBusy(event.currentTarget, true);
+  const metadata = {
+    full_name: $('#registerName').value.trim(),
+    phone: $('#registerPhone').value.trim()
+  };
+  await sendEmailCode({
+    email: $('#registerEmail').value.trim(),
+    mode: 'register',
+    metadata
+  });
+  setBusy(event.currentTarget, false);
+}
+
+async function resendEmailCode() {
+  if (!pendingOtp) return showAuthTab('login');
+  $('#resendOtp').disabled = true;
+  await sendEmailCode({ ...pendingOtp, resend: true });
+  $('#resendOtp').disabled = false;
+}
+
+async function verifyEmailCode(event) {
+  event.preventDefault();
+  if (!pendingOtp) return toast('Bitte zuerst einen Code anfordern.');
+  setBusy(event.currentTarget, true);
+  const token = $('#otpCode').value.replace(/\D/g, '');
+  const { error } = await sb.auth.verifyOtp({
+    email: pendingOtp.email,
+    token,
+    type: 'email'
+  });
+  setBusy(event.currentTarget, false);
+  if (error) return toast(error.message === 'Token has expired or is invalid' ? 'Der Code ist falsch oder abgelaufen.' : error.message);
+
+  if (pendingOtp.mode === 'register') $('#registerForm').reset();
+  pendingOtp = null;
+  toast('Erfolgreich angemeldet.');
+}
+
+async function socialLogin(provider) {
+  if (!configReady) return toast('Supabase ist noch nicht verbunden.');
+  const { error } = await sb.auth.signInWithOAuth({
+    provider,
+    options: { redirectTo: `${location.origin}${location.pathname}` }
+  });
+  if (error) {
+    const label = provider === 'google' ? 'Google' : 'Apple';
+    toast(`${label}-Anmeldung ist in Supabase noch nicht eingerichtet: ${error.message}`);
+  }
 }
 
 async function openApp() {
@@ -237,7 +288,8 @@ function closeApp() {
   appointments = [];
   $('#appView').classList.add('hidden');
   $('#authView').classList.remove('hidden');
-  $('#loginPassword').value = '';
+  pendingOtp = null;
+  $('#otpCode').value = '';
   showAuthTab('login');
 }
 
