@@ -188,6 +188,7 @@ function bindStaticEvents() {
   $('#profileForm').addEventListener('submit', saveOwnProfile);
   $('#formBuilderForm').addEventListener('submit', saveOnlineForm);
   $('#fillFormForm').addEventListener('submit', submitOnlineForm);
+  $('#reminderForm').addEventListener('submit', sendManualReminder);
   $('#appointmentService').addEventListener('change', () => {
     const svc = serviceById($('#appointmentService').value);
     if (!$('#appointmentId').value || currentProfile?.role === 'customer') $('#appointmentPrice').value = (Number(svc.price_cents || 0) / 100).toFixed(2);
@@ -430,7 +431,7 @@ function appointmentTable(list) {
       <td><span class="badge ${item.status}">${statusName(item.status)}</span></td>
       <td><div class="row-actions">
         <button class="mini" data-chat-appointment="${item.id}">Nachricht</button>
-        ${canEdit ? `<button class="mini" data-edit-appointment="${item.id}">Bearbeiten</button>` : ''}
+        ${canEdit ? `<button class="mini" data-remind-appointment="${item.id}">Erinnerung</button><button class="mini" data-edit-appointment="${item.id}">Bearbeiten</button>` : ''}
         ${canCancel ? `<button class="mini bad" data-cancel-appointment="${item.id}">Absagen</button>` : ''}
         ${currentProfile.role === 'admin' ? `<button class="mini bad" data-delete-appointment="${item.id}">Löschen</button>` : ''}
       </div></td>
@@ -443,6 +444,7 @@ function bindAppointmentActions() {
   $$('[data-cancel-appointment]').forEach((button) => button.onclick = () => cancelAppointment(button.dataset.cancelAppointment));
   $$('[data-delete-appointment]').forEach((button) => button.onclick = () => deleteAppointment(button.dataset.deleteAppointment));
   $$('[data-chat-appointment]').forEach((button) => button.onclick = () => openChatForAppointment(button.dataset.chatAppointment));
+  $$('[data-remind-appointment]').forEach((button) => button.onclick = () => openReminderDialog(button.dataset.remindAppointment));
 }
 
 function renderCalendar(content) {
@@ -527,8 +529,13 @@ function openPersonProfile(id) {
   $('#personDialogContent').innerHTML = `<div class="profile-summary"><div class="person-avatar large">${escapeHtml((item.full_name || item.email)[0].toUpperCase())}</div><div><h4>${escapeHtml(item.full_name || 'Ohne Name')}</h4><p>${escapeHtml(visibleEmail(item.email))}</p></div></div>
     <div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(item.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Rolle</span><b>${roleName(item.role)}</b></div><div class="info-row"><span>Status</span><b>${item.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${item.created_at ? new Intl.DateTimeFormat('de-DE').format(new Date(item.created_at)) : '–'}</b></div></div>
     <div class="profile-appointments"><h4>Termine (${personAppointments.length})</h4>${personAppointments.length ? personAppointments.slice(0, 8).map((appointment) => `<div class="profile-appointment"><b>${formatDate(appointment.appointment_date)} · ${appointment.appointment_time.slice(0,5)}</b><span>${escapeHtml(serviceById(appointment.service_id).name)} · ${statusName(appointment.status)}</span></div>`).join('') : '<p class="muted">Keine Termine vorhanden.</p>'}</div>
-    ${currentProfile.role === 'admin' ? `<div class="actions person-admin-actions"><button id="editPersonFromProfile" class="btn primary" type="button">Konto bearbeiten</button>${item.id !== currentProfile.id ? '<button id="deletePersonFromProfile" class="btn danger" type="button">Konto löschen</button>' : ''}</div>` : ''}`;
+    ${(['admin','employee'].includes(currentProfile.role) && item.role === 'customer') ? `<div class="actions person-admin-actions"><button id="chatPersonFromProfile" class="btn primary" type="button">Mit Kunde schreiben</button>${currentProfile.role==='admin'?'<button id="remindPersonFromProfile" class="btn ghost" type="button">Erinnerung senden</button>':''}</div>` : ''}
+    ${currentProfile.role === 'admin' ? `<div class="actions person-admin-actions"><button id="editPersonFromProfile" class="btn ghost" type="button">Konto bearbeiten</button>${item.id !== currentProfile.id ? '<button id="deletePersonFromProfile" class="btn danger" type="button">Konto löschen</button>' : ''}</div>` : ''}`;
   $('#personDialog').showModal();
+  const chatBtn = $('#chatPersonFromProfile');
+  if (chatBtn) chatBtn.onclick = async () => { $('#personDialog').close(); await startDirectCustomerChat(item.id); };
+  const remindBtn = $('#remindPersonFromProfile');
+  if (remindBtn) remindBtn.onclick = () => { $('#personDialog').close(); openGeneralReminderDialog(item.id); };
   if (currentProfile.role === 'admin') {
     $('#editPersonFromProfile').onclick = () => { $('#personDialog').close(); openUserDialog(item.id); };
     const deleteButton = $('#deletePersonFromProfile');
@@ -895,7 +902,20 @@ function startRealtimeSync() {
     .on('postgres_changes',{event:'*',schema:'public',table:'chat_threads'},scheduleRealtimeReload)
     .on('postgres_changes',{event:'*',schema:'public',table:'online_forms'},scheduleRealtimeReload)
     .on('postgres_changes',{event:'*',schema:'public',table:'form_submissions'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'app_notifications'},handleNotificationRealtime)
     .subscribe();
+}
+
+
+function handleNotificationRealtime(payload) {
+  const item=payload?.new;
+  if(payload?.eventType==='INSERT' && item?.user_id===currentProfile?.id) {
+    toast(`${item.title}: ${item.body}`);
+    if ('Notification' in window && Notification.permission==='granted') {
+      new Notification(item.title,{body:item.body});
+    }
+  }
+  scheduleRealtimeReload();
 }
 
 function scheduleRealtimeReload() {
@@ -933,10 +953,45 @@ async function checkAppointmentReminders() {
   }
 }
 
+function openReminderDialog(appointmentId) {
+  const item=appointments.find(a=>a.id===appointmentId); if(!item)return toast('Termin nicht gefunden.');
+  const customer=profileById(item.customer_id);
+  $('#reminderAppointmentId').value=item.id;
+  $('#reminderRecipient').textContent=`Empfänger: ${customer.full_name} · ${formatDate(item.appointment_date)} um ${item.appointment_time.slice(0,5)}`;
+  $('#reminderTitle').value='Terminerinnerung';
+  $('#reminderBody').value=`Hallo ${customer.full_name.split(' ')[0]}, wir erinnern Sie an Ihren Termin am ${formatDate(item.appointment_date)} um ${item.appointment_time.slice(0,5)} (${serviceById(item.service_id).name}).`;
+  $('#reminderDialog').showModal();
+}
+
+function openGeneralReminderDialog(customerId) {
+  const customer=profileById(customerId);
+  $('#reminderAppointmentId').value='';
+  $('#reminderRecipient').dataset.customerId=customerId;
+  $('#reminderRecipient').textContent=`Empfänger: ${customer.full_name}`;
+  $('#reminderTitle').value='Erinnerung';
+  $('#reminderBody').value=`Hallo ${customer.full_name.split(' ')[0]}, dies ist eine Erinnerung von Safa Yildiz.`;
+  $('#reminderDialog').showModal();
+}
+
+async function sendManualReminder(event) {
+  event.preventDefault();setBusy(event.currentTarget,true);
+  const appointmentId=$('#reminderAppointmentId').value||null;
+  const appointment=appointmentId?appointments.find(a=>a.id===appointmentId):null;
+  const customerId=appointment?.customer_id||$('#reminderRecipient').dataset.customerId;
+  if(!customerId){setBusy(event.currentTarget,false);return toast('Empfänger nicht gefunden.');}
+  const payload={user_id:customerId,appointment_id:appointmentId,type:'manual_reminder',title:$('#reminderTitle').value.trim(),body:$('#reminderBody').value.trim(),dedupe_key:`manual:${currentProfile.id}:${Date.now()}`,sender_id:currentProfile.id};
+  const {error}=await sb.from('app_notifications').insert(payload);
+  setBusy(event.currentTarget,false);
+  if(error)return toast(error.message);
+  $('#reminderDialog').close();
+  $('#reminderRecipient').dataset.customerId='';
+  toast('Erinnerung wurde verschickt.');
+}
+
 function renderNotifications(content) {
   setTitle('ERINNERUNGEN','Benachrichtigungen');
   const unread=notifications.filter(n=>!n.read).length;
-  content.innerHTML=`<div class="hero"><div><h3>Erinnerungen</h3><p>Terminerinnerungen erscheinen automatisch, sobald die Website geöffnet ist.</p></div><div class="hero-actions"><button id="enableNotifications" class="btn primary">Browser-Erinnerungen aktivieren</button>${unread?`<button id="markNotifications" class="btn ghost">Alle als gelesen</button>`:''}</div></div><div class="card notification-list">${notifications.length?notifications.map(n=>`<button class="notification-item ${n.read?'':'unread'}" data-read-notification="${n.id}"><div><b>${escapeHtml(n.title)}</b><p>${escapeHtml(n.body)}</p></div><small>${new Intl.DateTimeFormat('de-DE',{dateStyle:'short',timeStyle:'short'}).format(new Date(n.created_at))}</small></button>`).join(''):'<div class="empty">Noch keine Erinnerungen.</div>'}</div>`;
+  content.innerHTML=`<div class="hero"><div><h3>Erinnerungen</h3><p>Automatische und manuell verschickte Erinnerungen erscheinen hier sofort.</p></div><div class="hero-actions"><button id="enableNotifications" class="btn primary">Browser-Erinnerungen aktivieren</button>${unread?`<button id="markNotifications" class="btn ghost">Alle als gelesen</button>`:''}</div></div><div class="card notification-list">${notifications.length?notifications.map(n=>`<button class="notification-item ${n.read?'':'unread'}" data-read-notification="${n.id}"><div><b>${escapeHtml(n.title)}</b><p>${escapeHtml(n.body)}</p></div><small>${new Intl.DateTimeFormat('de-DE',{dateStyle:'short',timeStyle:'short'}).format(new Date(n.created_at))}</small></button>`).join(''):'<div class="empty">Noch keine Erinnerungen.</div>'}</div>`;
   $('#enableNotifications').onclick=async()=>{ if (!('Notification' in window)) return toast('Dieser Browser unterstützt keine Benachrichtigungen.'); const perm=await Notification.requestPermission(); toast(perm==='granted'?'Browser-Erinnerungen sind aktiv.':'Benachrichtigungen wurden nicht erlaubt.'); };
   const mark=$('#markNotifications'); if(mark) mark.onclick=async()=>{await sb.from('app_notifications').update({read:true}).eq('user_id',currentProfile.id); notifications=notifications.map(n=>({...n,read:true}));renderNotifications(content);};
   $$('[data-read-notification]').forEach(btn=>btn.onclick=async()=>{await sb.from('app_notifications').update({read:true}).eq('id',btn.dataset.readNotification);const n=notifications.find(x=>x.id===btn.dataset.readNotification);if(n)n.read=true;renderNotifications(content);});
@@ -964,17 +1019,41 @@ function renderChats(content) {
   setTitle('NACHRICHTEN',currentProfile.role==='admin'?'Alle Chats':'Chats');
   if (!activeChatThreadId && chatThreads[0]) activeChatThreadId=chatThreads[0].id;
   const active=chatThreads.find(t=>t.id===activeChatThreadId);
-  const possibleCustomers=profiles.filter(p=>p.role==='customer'&&p.active);
-  const possibleEmployees=profiles.filter(p=>['employee','admin'].includes(p.role)&&p.active);
-  content.innerHTML=`<div class="chat-layout"><aside class="chat-list"><div class="chat-list-head"><div><h3>${currentProfile.role==='admin'?'Alle Unterhaltungen':'Nachrichten'}</h3><small>${chatThreads.length} Chats</small></div><button id="newChatBtn" class="mini">+ Neu</button></div><div class="chat-thread-list">${chatThreads.length?chatThreads.map(t=>{const ppl=threadPeople(t);const msgs=chatMessages.filter(m=>m.thread_id===t.id);const last=msgs.at(-1);return `<button class="chat-thread ${t.id===activeChatThreadId?'active':''}" data-thread="${t.id}"><b>${escapeHtml(ppl.customer.full_name)} ↔ ${escapeHtml(ppl.employee.full_name)}</b><small>${escapeHtml(last?.body||'Noch keine Nachricht')}</small></button>`}).join(''):'<div class="empty">Noch keine Chats.</div>'}</div></aside><section class="chat-window">${active?chatWindowHtml(active):'<div class="empty">Wähle einen Chat aus.</div>'}</section></div>`;
+  content.innerHTML=`<div class="chat-layout"><aside class="chat-list"><div class="chat-list-head"><div><h3>${currentProfile.role==='admin'?'Alle Unterhaltungen':'Nachrichten'}</h3><small>${chatThreads.length} Chats</small></div><button id="newChatBtn" class="mini">+ Kunde anschreiben</button></div><div class="chat-thread-list">${chatThreads.length?chatThreads.map(t=>{const ppl=threadPeople(t);const msgs=chatMessages.filter(m=>m.thread_id===t.id);const last=msgs.at(-1);return `<button class="chat-thread ${t.id===activeChatThreadId?'active':''}" data-thread="${t.id}"><b>${escapeHtml(ppl.customer.full_name)} ↔ ${escapeHtml(ppl.employee.full_name)}</b><small>${escapeHtml(last?.body||'Noch keine Nachricht')}</small></button>`}).join(''):'<div class="empty">Noch keine Chats.</div>'}</div></aside><section class="chat-window">${active?chatWindowHtml(active):'<div class="empty">Wähle einen Chat aus oder schreibe einen Kunden an.</div>'}</section></div>`;
   $$('[data-thread]').forEach(btn=>btn.onclick=()=>{activeChatThreadId=btn.dataset.thread;renderChats(content);});
-  $('#newChatBtn').onclick=async()=>{
-    let customerId=currentProfile.role==='customer'?currentProfile.id:null; let employeeId=currentProfile.role==='employee'?currentProfile.id:null;
-    if(currentProfile.role==='admin'||currentProfile.role==='employee'){const name=prompt(`Kundenname oder E-Mail:\n${possibleCustomers.slice(0,12).map(p=>p.full_name).join(', ')}`)||'';const p=possibleCustomers.find(x=>`${x.full_name} ${x.email}`.toLowerCase().includes(name.toLowerCase()));if(!p)return toast('Kunde nicht gefunden.');customerId=p.id;}
-    if(currentProfile.role==='admin'||currentProfile.role==='customer'){const name=prompt(`Mitarbeitername:\n${possibleEmployees.map(p=>p.full_name).join(', ')}`)||'';const p=possibleEmployees.find(x=>x.full_name.toLowerCase().includes(name.toLowerCase()));if(!p)return toast('Mitarbeiter nicht gefunden.');employeeId=p.id;}
-    try{const t=await ensureChatThread(customerId,employeeId,null);activeChatThreadId=t.id;await loadData();renderChats(content);}catch(e){toast(e.message);}
-  };
+  $('#newChatBtn').onclick=()=>openDirectChatPicker();
   const form=$('#chatSendForm'); if(form) form.onsubmit=sendChatMessage;
+}
+
+async function startDirectCustomerChat(customerId) {
+  const customer=profiles.find(p=>p.id===customerId && p.role==='customer');
+  if(!customer) return toast('Kunde wurde nicht gefunden.');
+  const employeeId=currentProfile.id;
+  try {
+    const thread=await ensureChatThread(customer.id,employeeId,null);
+    activeChatThreadId=thread.id;
+    currentPage='chats';
+    renderNav();
+    await loadData();
+    renderPage();
+  } catch(error) { toast(error.message); }
+}
+
+function openDirectChatPicker() {
+  if (currentProfile.role==='customer') {
+    const team=profiles.filter(p=>['employee','admin'].includes(p.role)&&p.active);
+    const name=prompt(`Mitarbeitername:\n${team.map(p=>p.full_name).join(', ')}`)||'';
+    const person=team.find(p=>p.full_name.toLowerCase().includes(name.toLowerCase()));
+    if(!person) return toast('Mitarbeiter nicht gefunden.');
+    ensureChatThread(currentProfile.id,person.id,null).then(async t=>{activeChatThreadId=t.id;await loadData();renderPage();}).catch(e=>toast(e.message));
+    return;
+  }
+  const customers=profiles.filter(p=>p.role==='customer'&&p.active);
+  const name=prompt(`Kundenname oder E-Mail:\n${customers.slice(0,20).map(p=>p.full_name).join(', ')}`)||'';
+  const query=name.trim().toLowerCase();
+  const person=customers.find(p=>`${p.full_name||''} ${p.email||''}`.toLowerCase().includes(query));
+  if(!person) return toast('Kunde nicht gefunden.');
+  startDirectCustomerChat(person.id);
 }
 
 function chatWindowHtml(thread) {
@@ -992,10 +1071,11 @@ async function sendChatMessage(event) {
 }
 
 function renderForms(content) {
-  setTitle('FORMULARE','Online-Formulare');
+  setTitle('FORMULARE','Formulare');
   const visible=forms.filter(f=>currentProfile.role==='admin'||f.published);
-  content.innerHTML=`<div class="hero"><div><h3>Online-Formulare</h3><p>${currentProfile.role==='admin'?'Formulare erstellen, veröffentlichen und Antworten ansehen.':'Formulare direkt online ausfüllen.'}</p></div>${currentProfile.role==='admin'?'<button id="newOnlineForm" class="btn primary">+ Formular</button>':''}</div><div class="forms-grid">${visible.length?visible.map(f=>{const subs=formSubmissions.filter(s=>s.form_id===f.id);const own=subs.find(s=>s.user_id===currentProfile.id);return `<div class="card form-card"><div class="form-card-head"><div><h3>${escapeHtml(f.title)}</h3><p>${escapeHtml(f.description||'')}</p></div><span class="badge ${f.published?'active':'inactive'}">${f.published?'Online':'Entwurf'}</span></div><p class="muted">${Array.isArray(f.questions)?f.questions.length:0} Fragen${currentProfile.role==='admin'?` · ${subs.length} Antworten`:own?' · Bereits ausgefüllt':''}</p><div class="row-actions"><button class="btn primary" data-fill-form="${f.id}">${own&&currentProfile.role!=='admin'?'Erneut ausfüllen':'Ausfüllen'}</button>${currentProfile.role==='admin'?`<button class="mini" data-edit-form="${f.id}">Bearbeiten</button><button class="mini" data-submissions="${f.id}">Antworten (${subs.length})</button><button class="mini bad" data-delete-form="${f.id}">Löschen</button>`:''}</div></div>`}).join(''):'<div class="card empty">Keine Formulare vorhanden.</div>'}</div>`;
+  content.innerHTML=`<div class="hero"><div><h3>Formulare</h3><p>${currentProfile.role==='admin'?'Eigene PDF-/Bild-/Word-Formulare hochladen oder Online-Fragen erstellen.':'Formulare öffnen, online ausfüllen oder ausgefüllte Dateien zurücksenden.'}</p></div>${currentProfile.role==='admin'?'<button id="newOnlineForm" class="btn primary">+ Formular hochladen / erstellen</button>':''}</div><div class="forms-grid">${visible.length?visible.map(f=>{const subs=formSubmissions.filter(s=>s.form_id===f.id);const own=subs.find(s=>s.user_id===currentProfile.id);const hasFile=Boolean(f.file_path);const qCount=Array.isArray(f.questions)?f.questions.length:0;return `<div class="card form-card"><div class="form-card-head"><div><h3>${escapeHtml(f.title)}</h3><p>${escapeHtml(f.description||'')}</p></div><span class="badge ${f.published?'active':'inactive'}">${f.published?'Online':'Entwurf'}</span></div><p class="muted">${hasFile?'📎 Eigene Datei · ':''}${qCount} Online-Fragen${currentProfile.role==='admin'?` · ${subs.length} Antworten`:own?' · Bereits gesendet':''}</p><div class="row-actions">${hasFile?`<button class="mini" data-open-form-file="${f.id}">Datei öffnen</button>`:''}<button class="btn primary" data-fill-form="${f.id}">${hasFile?'Ausfüllen / zurücksenden':'Online ausfüllen'}</button>${currentProfile.role==='admin'?`<button class="mini" data-edit-form="${f.id}">Bearbeiten</button><button class="mini" data-submissions="${f.id}">Antworten (${subs.length})</button><button class="mini bad" data-delete-form="${f.id}">Löschen</button>`:''}</div></div>`}).join(''):'<div class="card empty">Keine Formulare vorhanden.</div>'}</div>`;
   const newBtn=$('#newOnlineForm');if(newBtn)newBtn.onclick=()=>openOnlineFormDialog();
+  $$('[data-open-form-file]').forEach(btn=>btn.onclick=()=>openFormTemplateFile(btn.dataset.openFormFile));
   $$('[data-fill-form]').forEach(btn=>btn.onclick=()=>openFillForm(btn.dataset.fillForm));
   $$('[data-edit-form]').forEach(btn=>btn.onclick=()=>openOnlineFormDialog(btn.dataset.editForm));
   $$('[data-submissions]').forEach(btn=>btn.onclick=()=>showFormSubmissions(btn.dataset.submissions));
@@ -1003,26 +1083,127 @@ function renderForms(content) {
 }
 
 function openOnlineFormDialog(id=null) {
-  const f=id?forms.find(x=>x.id===id):null;$('#formDialogTitle').textContent=f?'Formular bearbeiten':'Formular erstellen';$('#formId').value=f?.id||'';$('#formTitle').value=f?.title||'';$('#formDescription').value=f?.description||'';$('#formQuestions').value=Array.isArray(f?.questions)?f.questions.join('\n'):'';$('#formPublished').checked=f?.published??true;$('#formDialog').showModal();
+  const f=id?forms.find(x=>x.id===id):null;
+  $('#formDialogTitle').textContent=f?'Formular bearbeiten':'Formular hochladen / erstellen';
+  $('#formId').value=f?.id||'';
+  $('#formTitle').value=f?.title||'';
+  $('#formDescription').value=f?.description||'';
+  $('#formQuestions').value=Array.isArray(f?.questions)?f.questions.join('\n'):'';
+  $('#formPublished').checked=f?.published??true;
+  $('#formFile').value='';
+  const current=$('#formFileCurrent');
+  current.classList.toggle('hidden',!f?.file_name);
+  current.textContent=f?.file_name?`Aktuelle Datei: ${f.file_name}. Wähle nur eine neue Datei, wenn du sie ersetzen möchtest.`:'';
+  $('#formDialog').showModal();
+}
+
+function safeFileName(name='datei') {
+  return String(name).normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-zA-Z0-9._-]+/g,'_').slice(-120);
+}
+
+async function uploadTemplateFile(file, formId) {
+  const path=`templates/${formId}/${Date.now()}-${safeFileName(file.name)}`;
+  const {error}=await sb.storage.from('forms').upload(path,file,{upsert:false,contentType:file.type||undefined});
+  if(error) throw error;
+  return path;
+}
+
+async function openStorageFile(path) {
+  const popup=window.open('about:blank','_blank');
+  const {data,error}=await sb.storage.from('forms').createSignedUrl(path,300);
+  if(error) { if(popup) popup.close(); return toast(error.message); }
+  if(popup) { popup.opener=null; popup.location=data.signedUrl; }
+  else location.href=data.signedUrl;
+}
+
+async function openFormTemplateFile(id) {
+  const f=forms.find(x=>x.id===id); if(!f?.file_path)return toast('Keine Datei vorhanden.');
+  await openStorageFile(f.file_path);
 }
 
 async function saveOnlineForm(event) {
-  event.preventDefault();setBusy(event.currentTarget,true);const id=$('#formId').value;const questions=$('#formQuestions').value.split('\n').map(x=>x.trim()).filter(Boolean);const payload={title:$('#formTitle').value.trim(),description:$('#formDescription').value.trim(),questions,published:$('#formPublished').checked,created_by:currentProfile.id};const result=id?await sb.from('online_forms').update(payload).eq('id',id):await sb.from('online_forms').insert(payload);setBusy(event.currentTarget,false);if(result.error)return toast(result.error.message);$('#formDialog').close();await reloadAndRender('Formular wurde gespeichert.');
+  event.preventDefault();
+  setBusy(event.currentTarget,true);
+  const id=$('#formId').value || crypto.randomUUID();
+  const questions=$('#formQuestions').value.split('\n').map(x=>x.trim()).filter(Boolean);
+  const existing=forms.find(x=>x.id===id);
+  const file=$('#formFile').files?.[0]||null;
+  let filePath=existing?.file_path||null, fileName=existing?.file_name||null, fileMime=existing?.file_mime||null;
+  try {
+    if(file){
+      if(file.size>10*1024*1024) throw new Error('Die Datei darf höchstens 10 MB groß sein.');
+      filePath=await uploadTemplateFile(file,id); fileName=file.name; fileMime=file.type||'';
+    }
+    const payload={id,title:$('#formTitle').value.trim(),description:$('#formDescription').value.trim(),questions,published:$('#formPublished').checked,created_by:currentProfile.id,file_path:filePath,file_name:fileName,file_mime:fileMime};
+    if(!payload.title) throw new Error('Bitte einen Titel eintragen.');
+    if(!filePath && questions.length===0) throw new Error('Bitte eine Datei hochladen oder mindestens eine Online-Frage eintragen.');
+    const result=existing?await sb.from('online_forms').update(payload).eq('id',id):await sb.from('online_forms').insert(payload);
+    if(result.error) throw result.error;
+    $('#formDialog').close(); await reloadAndRender('Formular wurde gespeichert.');
+  } catch(error){ toast(error.message); }
+  finally { setBusy(event.currentTarget,false); }
 }
 
 function openFillForm(id) {
-  const f=forms.find(x=>x.id===id);if(!f)return;$('#fillFormId').value=f.id;$('#fillFormTitle').textContent=f.title;$('#fillFormDescription').textContent=f.description||'';$('#fillFormQuestions').innerHTML=(f.questions||[]).map((q,i)=>`<label>${escapeHtml(q)}<textarea data-form-answer="${i}" rows="2" required></textarea></label>`).join('');$('#fillFormDialog').showModal();
+  const f=forms.find(x=>x.id===id);if(!f)return;
+  $('#fillFormId').value=f.id;
+  $('#fillFormTitle').textContent=f.title;
+  $('#fillFormDescription').textContent=f.description||'';
+  $('#fillFormFile').value='';
+  const template=$('#fillFormTemplate');
+  template.classList.toggle('hidden',!f.file_path);
+  template.innerHTML=f.file_path?`<div><b>Vorlage:</b> ${escapeHtml(f.file_name||'Formular')}</div><button id="openTemplateFromFill" type="button" class="btn ghost">Vorlage öffnen</button>`:'';
+  if(f.file_path) $('#openTemplateFromFill').onclick=()=>openStorageFile(f.file_path);
+  $('#fillFormFileWrap').classList.toggle('hidden',!f.file_path);
+  $('#fillFormQuestions').innerHTML=(f.questions||[]).map((q,i)=>`<label>${escapeHtml(q)}<textarea data-form-answer="${i}" rows="2" required></textarea></label>`).join('');
+  $('#fillFormDialog').showModal();
+}
+
+async function uploadSubmissionFile(file, formId) {
+  const path=`submissions/${currentProfile.id}/${formId}/${Date.now()}-${safeFileName(file.name)}`;
+  const {error}=await sb.storage.from('forms').upload(path,file,{upsert:false,contentType:file.type||undefined});
+  if(error) throw error;
+  return path;
 }
 
 async function submitOnlineForm(event) {
-  event.preventDefault();setBusy(event.currentTarget,true);const id=$('#fillFormId').value;const f=forms.find(x=>x.id===id);const answers=(f.questions||[]).map((question,i)=>({question,answer:$(`[data-form-answer="${i}"]`).value.trim()}));const {error}=await sb.from('form_submissions').insert({form_id:id,user_id:currentProfile.id,answers});setBusy(event.currentTarget,false);if(error)return toast(error.message);$('#fillFormDialog').close();await reloadAndRender('Formular wurde abgesendet.');
+  event.preventDefault();setBusy(event.currentTarget,true);
+  const id=$('#fillFormId').value;const f=forms.find(x=>x.id===id);
+  const answers=(f.questions||[]).map((question,i)=>({question,answer:$(`[data-form-answer="${i}"]`).value.trim()}));
+  const file=$('#fillFormFile').files?.[0]||null;
+  let filePath=null,fileName=null;
+  try{
+    if(file){ if(file.size>10*1024*1024) throw new Error('Die Datei darf höchstens 10 MB groß sein.'); filePath=await uploadSubmissionFile(file,id);fileName=file.name; }
+    if(answers.length===0 && !filePath) throw new Error('Bitte eine ausgefüllte Datei auswählen.');
+    const {error}=await sb.from('form_submissions').insert({form_id:id,user_id:currentProfile.id,answers,file_path:filePath,file_name:fileName});
+    if(error)throw error;
+    $('#fillFormDialog').close();await reloadAndRender('Formular wurde abgesendet.');
+  }catch(error){toast(error.message);}finally{setBusy(event.currentTarget,false);}
 }
 
 function showFormSubmissions(id) {
-  const f=forms.find(x=>x.id===id);const subs=formSubmissions.filter(s=>s.form_id===id);$('#submissionDialogTitle').textContent=`${f?.title||'Formular'} – Antworten`;$('#submissionDialogContent').innerHTML=subs.length?subs.map(s=>`<button class="submission-card" data-show-submission="${s.id}"><b>${escapeHtml(profileById(s.user_id).full_name)}</b><span>${new Intl.DateTimeFormat('de-DE',{dateStyle:'medium',timeStyle:'short'}).format(new Date(s.submitted_at))}</span></button>`).join(''):'<div class="empty">Noch keine Antworten.</div>';$('#submissionDialog').showModal();$$('[data-show-submission]').forEach(btn=>btn.onclick=()=>{const sub=formSubmissions.find(x=>x.id===btn.dataset.showSubmission);$('#submissionDialogContent').innerHTML=`<button id="backSubs" class="mini">← Zurück</button><h4>${escapeHtml(profileById(sub.user_id).full_name)}</h4><div class="answer-list">${(sub.answers||[]).map(a=>`<div><b>${escapeHtml(a.question)}</b><p>${escapeHtml(a.answer||'–')}</p></div>`).join('')}</div>`;$('#backSubs').onclick=()=>showFormSubmissions(id);});
+  const f=forms.find(x=>x.id===id);const subs=formSubmissions.filter(s=>s.form_id===id);
+  $('#submissionDialogTitle').textContent=`${f?.title||'Formular'} – Antworten`;
+  $('#submissionDialogContent').innerHTML=subs.length?subs.map(s=>`<button class="submission-card" data-show-submission="${s.id}"><b>${escapeHtml(profileById(s.user_id).full_name)}</b><span>${new Intl.DateTimeFormat('de-DE',{dateStyle:'medium',timeStyle:'short'}).format(new Date(s.submitted_at))}${s.file_path?' · Datei':''}</span></button>`).join(''):'<div class="empty">Noch keine Antworten.</div>';
+  $('#submissionDialog').showModal();
+  $$('[data-show-submission]').forEach(btn=>btn.onclick=()=>{
+    const sub=formSubmissions.find(x=>x.id===btn.dataset.showSubmission);
+    $('#submissionDialogContent').innerHTML=`<button id="backSubs" class="mini">← Zurück</button><h4>${escapeHtml(profileById(sub.user_id).full_name)}</h4>${sub.file_path?`<button id="openSubmissionFile" class="btn primary" type="button">${escapeHtml(sub.file_name||'Ausgefüllte Datei')} öffnen</button>`:''}<div class="answer-list">${(sub.answers||[]).map(a=>`<div><b>${escapeHtml(a.question)}</b><p>${escapeHtml(a.answer||'–')}</p></div>`).join('')}</div>`;
+    $('#backSubs').onclick=()=>showFormSubmissions(id);
+    const openBtn=$('#openSubmissionFile'); if(openBtn) openBtn.onclick=()=>openStorageFile(sub.file_path);
+  });
 }
 
-async function deleteOnlineForm(id) { if(!confirm('Formular wirklich löschen? Auch Antworten werden gelöscht.'))return;const {error}=await sb.from('online_forms').delete().eq('id',id);if(error)return toast(error.message);await reloadAndRender('Formular wurde gelöscht.'); }
+async function deleteOnlineForm(id) {
+  if(!confirm('Formular wirklich löschen? Auch Antworten werden gelöscht.'))return;
+  const f=forms.find(x=>x.id===id);
+  const subs=formSubmissions.filter(x=>x.form_id===id);
+  const paths=[f?.file_path,...subs.map(x=>x.file_path)].filter(Boolean);
+  if(paths.length) await sb.storage.from('forms').remove(paths);
+  const {error}=await sb.from('online_forms').delete().eq('id',id);
+  if(error)return toast(error.message);
+  await reloadAndRender('Formular wurde gelöscht.');
+}
 
 async function reloadAndRender(message = '') {
   $('#pageContent').innerHTML = '<div class="loading">Daten werden aktualisiert …</div>';

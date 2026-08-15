@@ -30,3 +30,9 @@
 
 @media(max-width:1150px){.year-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.chat-layout{grid-template-columns:280px 1fr}.week-seven{grid-template-columns:repeat(7,190px)}}
 @media(max-width:760px){.calendar-toolbar-wrap{flex-direction:column}.calendar-toolbar{justify-content:flex-start}.calendar-period{min-width:auto}.month-grid{overflow:auto}.month-weekdays,.month-days{min-width:700px}.year-grid{grid-template-columns:1fr}.chat-layout{grid-template-columns:1fr;min-height:auto}.chat-list{max-height:280px}.chat-window{min-height:520px}.forms-grid{grid-template-columns:1fr}.message{max-width:88%}}
+
+/* Upload-Formulare / Erinnerungen */
+.uploaded-template{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:13px 14px;background:#f8fafc;border:1px solid var(--line);border-radius:13px}
+.uploaded-template b{font-size:13px}.uploaded-template .btn{white-space:nowrap}
+input[type="file"]{padding:9px;background:#f8fafc}
+@media(max-width:560px){.uploaded-template{align-items:flex-start;flex-direction:column}.uploaded-template .btn{width:100%}}
