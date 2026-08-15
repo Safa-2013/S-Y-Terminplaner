@@ -15,7 +15,18 @@ let currentProfile = null;
 let profiles = [];
 let services = [];
 let appointments = [];
+let chatThreads = [];
+let chatMessages = [];
+let forms = [];
+let formSubmissions = [];
+let notifications = [];
 let currentPage = 'dashboard';
+let calendarView = 'week';
+let calendarCursor = new Date();
+let activeChatThreadId = null;
+let realtimeChannel = null;
+let backgroundTimer = null;
+let realtimeDebounce = null;
 
 const today = new Date();
 const iso = (date) => {
@@ -97,8 +108,30 @@ function profileById(id) {
 }
 
 function serviceById(id) {
-  return services.find((item) => item.id === id) || { name: 'Unbekannt', duration_minutes: 0 };
+  return services.find((item) => item.id === id) || { name: 'Unbekannt', duration_minutes: 0, price_cents: 0 };
 }
+
+function euro(cents = 0) {
+  return new Intl.NumberFormat('de-DE', { style: 'currency', currency: 'EUR' }).format(Number(cents || 0) / 100);
+}
+
+function localDateTime(item) {
+  return new Date(`${item.appointment_date}T${String(item.appointment_time || '00:00').slice(0, 8)}`);
+}
+
+function startOfWeek(date) {
+  const d = new Date(date);
+  d.setHours(12,0,0,0);
+  const weekday = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - weekday);
+  return d;
+}
+
+function monthKey(date) { return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`; }
+function sameDay(a,b) { return iso(a) === iso(b); }
+function addMonths(date, n) { const d=new Date(date); d.setDate(1); d.setMonth(d.getMonth()+n); return d; }
+function addYears(date, n) { const d=new Date(date); d.setFullYear(d.getFullYear()+n); return d; }
+function addCalendarDays(date,n){ const d=new Date(date); d.setDate(d.getDate()+n); return d; }
 
 function setTitle(eyebrow, title) {
   $('#pageEyebrow').textContent = eyebrow;
@@ -153,6 +186,12 @@ function bindStaticEvents() {
   $('#userForm').addEventListener('submit', saveAdminUser);
   $('#serviceForm').addEventListener('submit', saveService);
   $('#profileForm').addEventListener('submit', saveOwnProfile);
+  $('#formBuilderForm').addEventListener('submit', saveOnlineForm);
+  $('#fillFormForm').addEventListener('submit', submitOnlineForm);
+  $('#appointmentService').addEventListener('change', () => {
+    const svc = serviceById($('#appointmentService').value);
+    if (!$('#appointmentId').value || currentProfile?.role === 'customer') $('#appointmentPrice').value = (Number(svc.price_cents || 0) / 100).toFixed(2);
+  });
 }
 
 async function loginWithPassword(event) {
@@ -234,6 +273,9 @@ async function openApp() {
   currentPage = 'dashboard';
   renderNav();
   renderPage();
+  startRealtimeSync();
+  startBackgroundTasks();
+  checkAppointmentReminders();
 }
 
 async function loadProfileWithRetry() {
@@ -249,20 +291,31 @@ async function loadProfileWithRetry() {
 }
 
 async function loadData() {
-  const [profileResult, serviceResult, appointmentResult] = await Promise.all([
+  const queries = [
     sb.from('profiles').select('*').order('full_name'),
     sb.from('services').select('*').order('name'),
-    sb.from('appointments').select('*').order('appointment_date').order('appointment_time')
-  ]);
+    sb.from('appointments').select('*').order('appointment_date').order('appointment_time'),
+    sb.from('chat_threads').select('*').order('updated_at', { ascending: false }),
+    sb.from('chat_messages').select('*').order('created_at'),
+    sb.from('online_forms').select('*').order('created_at', { ascending: false }),
+    sb.from('form_submissions').select('*').order('submitted_at', { ascending: false }),
+    sb.from('app_notifications').select('*').order('created_at', { ascending: false }).limit(100)
+  ];
+  const [profileResult, serviceResult, appointmentResult, threadResult, messageResult, formResult, submissionResult, notificationResult] = await Promise.all(queries);
 
-  if (profileResult.error) toast(profileResult.error.message);
-  if (serviceResult.error) toast(serviceResult.error.message);
-  if (appointmentResult.error) toast(appointmentResult.error.message);
+  [profileResult, serviceResult, appointmentResult, threadResult, messageResult, formResult, submissionResult, notificationResult]
+    .filter((result) => result.error)
+    .forEach((result) => console.warn(result.error.message));
 
   profiles = profileResult.data || [currentProfile];
   if (!profiles.some((item) => item.id === currentProfile.id)) profiles.push(currentProfile);
   services = serviceResult.data || [];
   appointments = appointmentResult.data || [];
+  chatThreads = threadResult.data || [];
+  chatMessages = messageResult.data || [];
+  forms = formResult.data || [];
+  formSubmissions = submissionResult.data || [];
+  notifications = notificationResult.data || [];
 }
 
 function closeApp() {
@@ -271,6 +324,16 @@ function closeApp() {
   profiles = [];
   services = [];
   appointments = [];
+  chatThreads = [];
+  chatMessages = [];
+  forms = [];
+  formSubmissions = [];
+  notifications = [];
+  activeChatThreadId = null;
+  if (backgroundTimer) clearInterval(backgroundTimer);
+  backgroundTimer = null;
+  if (realtimeChannel && sb) sb.removeChannel(realtimeChannel);
+  realtimeChannel = null;
   $('#appView').classList.add('hidden');
   $('#authView').classList.remove('hidden');
   showAuthTab('login');
@@ -280,16 +343,21 @@ function navItems() {
   if (currentProfile.role === 'admin') {
     return [
       ['dashboard', 'Übersicht'], ['calendar', 'Kalender'], ['requests', 'Terminanfragen'],
-      ['users', 'Konten verwalten'], ['services', 'Leistungen'], ['profile', 'Mein Profil']
+      ['chats', 'Alle Chats'], ['forms', 'Formulare'], ['notifications', 'Erinnerungen'],
+      ['users', 'Konten verwalten'], ['services', 'Leistungen & Preise'], ['profile', 'Mein Profil']
     ];
   }
   if (currentProfile.role === 'employee') {
     return [
       ['dashboard', 'Übersicht'], ['calendar', 'Mein Kalender'], ['requests', 'Anfragen'],
+      ['chats', 'Chats'], ['forms', 'Formulare'], ['notifications', 'Erinnerungen'],
       ['customers', 'Kunden'], ['profile', 'Mein Profil']
     ];
   }
-  return [['dashboard', 'Meine Termine'], ['request', 'Termin beantragen'], ['profile', 'Mein Profil']];
+  return [
+    ['dashboard', 'Meine Termine'], ['request', 'Termin beantragen'], ['calendar', 'Kalender'],
+    ['chats', 'Nachrichten'], ['forms', 'Formulare'], ['notifications', 'Erinnerungen'], ['profile', 'Mein Profil']
+  ];
 }
 
 function renderNav() {
@@ -317,6 +385,9 @@ function renderPage() {
   if (currentPage === 'customers') return renderCustomers(content);
   if (currentPage === 'profile') return renderProfile(content);
   if (currentPage === 'request') return renderRequestPage(content);
+  if (currentPage === 'chats') return renderChats(content);
+  if (currentPage === 'forms') return renderForms(content);
+  if (currentPage === 'notifications') return renderNotifications(content);
 }
 
 function renderDashboard(content) {
@@ -346,7 +417,7 @@ function renderDashboard(content) {
 function appointmentTable(list) {
   if (!list.length) return '<div class="empty">Noch keine Termine vorhanden.</div>';
   return `<div class="table-wrap"><table class="data-table"><thead><tr>
-    <th>Datum</th><th>Uhrzeit</th><th>Kunde</th><th>Mitarbeiter</th><th>Leistung</th><th>Status</th><th>Aktion</th>
+    <th>Datum</th><th>Uhrzeit</th><th>Kunde</th><th>Mitarbeiter</th><th>Leistung</th><th>Preis</th><th>Status</th><th>Aktion</th>
   </tr></thead><tbody>${list.map((item) => {
     const canEdit = currentProfile.role === 'admin' || currentProfile.role === 'employee';
     const canCancel = currentProfile.role === 'customer' && ['requested', 'confirmed'].includes(item.status);
@@ -355,8 +426,10 @@ function appointmentTable(list) {
       <td>${escapeHtml(profileById(item.customer_id).full_name)}</td>
       <td>${escapeHtml(profileById(item.employee_id).full_name)}</td>
       <td>${escapeHtml(serviceById(item.service_id).name)}</td>
+      <td><b>${euro(item.price_cents ?? serviceById(item.service_id).price_cents)}</b></td>
       <td><span class="badge ${item.status}">${statusName(item.status)}</span></td>
       <td><div class="row-actions">
+        <button class="mini" data-chat-appointment="${item.id}">Nachricht</button>
         ${canEdit ? `<button class="mini" data-edit-appointment="${item.id}">Bearbeiten</button>` : ''}
         ${canCancel ? `<button class="mini bad" data-cancel-appointment="${item.id}">Absagen</button>` : ''}
         ${currentProfile.role === 'admin' ? `<button class="mini bad" data-delete-appointment="${item.id}">Löschen</button>` : ''}
@@ -369,35 +442,32 @@ function bindAppointmentActions() {
   $$('[data-edit-appointment]').forEach((button) => button.onclick = () => openAppointment(button.dataset.editAppointment));
   $$('[data-cancel-appointment]').forEach((button) => button.onclick = () => cancelAppointment(button.dataset.cancelAppointment));
   $$('[data-delete-appointment]').forEach((button) => button.onclick = () => deleteAppointment(button.dataset.deleteAppointment));
+  $$('[data-chat-appointment]').forEach((button) => button.onclick = () => openChatForAppointment(button.dataset.chatAppointment));
 }
 
 function renderCalendar(content) {
   setTitle('KALENDER', currentProfile.role === 'admin' ? 'Gesamter Kalender' : 'Mein Kalender');
-  const start = new Date();
-  const weekday = (start.getDay() + 6) % 7;
-  start.setDate(start.getDate() - weekday);
-  const days = Array.from({ length: 5 }, (_, index) => {
-    const date = new Date(start);
-    date.setDate(start.getDate() + index);
-    return date;
-  });
+  const title = calendarPeriodLabel();
+  content.innerHTML = `<div class="calendar-toolbar-wrap">
+    <div><h3>Termin-Kalender</h3><p class="muted">Automatisch aktuell · ${new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit'}).format(new Date())}</p></div>
+    <div class="calendar-toolbar">
+      <button id="calPrev" class="btn ghost">‹</button><button id="calToday" class="btn ghost">Heute</button><button id="calNext" class="btn ghost">›</button>
+      <strong class="calendar-period">${escapeHtml(title)}</strong>
+      <div class="view-switch">
+        ${[['day','Tag'],['week','Woche'],['month','Monat'],['year','Jahr']].map(([id,label])=>`<button class="mini ${calendarView===id?'selected':''}" data-calendar-view="${id}">${label}</button>`).join('')}
+      </div>
+      <button id="calendarRefresh" class="btn ghost">↻ Aktualisieren</button>
+      <button id="calendarNew" class="btn primary">+ Termin</button>
+    </div>
+  </div><div id="calendarBody">${calendarViewHtml()}</div>`;
 
-  content.innerHTML = `<div class="hero"><div><h3>Wochenplan</h3><p>Montag bis Freitag, alle Termine nach Uhrzeit.</p></div><button id="calendarNew" class="btn primary">+ Termin</button></div>
-    <div class="calendar">${days.map((date) => {
-      const value = iso(date);
-      const dayAppointments = appointments
-        .filter((item) => item.appointment_date === value && !['rejected', 'cancelled'].includes(item.status))
-        .sort((a, b) => a.appointment_time.localeCompare(b.appointment_time));
-      return `<section class="day"><div class="day-head"><strong>${new Intl.DateTimeFormat('de-DE', { weekday: 'long' }).format(date)}</strong><span>${new Intl.DateTimeFormat('de-DE', { day: '2-digit', month: '2-digit' }).format(date)}</span></div>
-        ${dayAppointments.length ? dayAppointments.map((item) => `<div class="event ${item.status === 'requested' ? 'pending' : item.status === 'completed' ? 'done' : ''}" ${currentProfile.role !== 'customer' ? `data-edit-appointment="${item.id}"` : ''}>
-          <b>${item.appointment_time.slice(0, 5)} · ${escapeHtml(serviceById(item.service_id).name)}</b>
-          <small>${currentProfile.role === 'customer' ? escapeHtml(profileById(item.employee_id).full_name) : escapeHtml(profileById(item.customer_id).full_name)}</small>
-          <small>${statusName(item.status)}</small>
-        </div>`).join('') : '<div class="empty">Frei</div>'}</section>`;
-    }).join('')}</div>`;
-
+  $('#calPrev').onclick = () => moveCalendar(-1);
+  $('#calNext').onclick = () => moveCalendar(1);
+  $('#calToday').onclick = () => { calendarCursor = new Date(); renderCalendar(content); };
+  $('#calendarRefresh').onclick = () => reloadAndRender('Kalender wurde aktualisiert.');
   $('#calendarNew').onclick = () => openAppointment();
-  $$('[data-edit-appointment]').forEach((button) => button.onclick = () => openAppointment(button.dataset.editAppointment));
+  $$('[data-calendar-view]').forEach((button) => button.onclick = () => { calendarView = button.dataset.calendarView; calendarCursor = new Date(); renderCalendar(content); });
+  $$('[data-calendar-appointment]').forEach((button) => button.onclick = () => currentProfile.role === 'customer' ? openChatForAppointment(button.dataset.calendarAppointment) : openAppointment(button.dataset.calendarAppointment));
 }
 
 function renderRequests(content) {
@@ -483,8 +553,8 @@ function renderCustomers(content) {
 }
 
 function renderServices(content) {
-  setTitle('EINSTELLUNGEN', 'Leistungen');
-  content.innerHTML = `<div class="hero"><div><h3>Leistungen verwalten</h3><p>Diese Leistungen können bei Terminen ausgewählt werden.</p></div><button id="newService" class="btn primary">+ Leistung</button></div><div class="card"><div class="service-list">${services.map((item) => `<div class="service"><div><b>${escapeHtml(item.name)}</b><span>${item.duration_minutes} Minuten · ${item.active ? 'Aktiv' : 'Deaktiviert'}</span></div><div class="row-actions"><button class="mini" data-edit-service="${item.id}">Bearbeiten</button><button class="mini bad" data-delete-service="${item.id}">Löschen</button></div></div>`).join('') || '<div class="empty">Keine Leistungen vorhanden.</div>'}</div></div>`;
+  setTitle('EINSTELLUNGEN', 'Leistungen & Preise');
+  content.innerHTML = `<div class="hero"><div><h3>Leistungen und Preise</h3><p>Preis und Dauer werden bei neuen Terminen automatisch übernommen.</p></div><button id="newService" class="btn primary">+ Leistung</button></div><div class="card"><div class="service-list">${services.map((item) => `<div class="service"><div><b>${escapeHtml(item.name)}</b><span>${item.duration_minutes} Minuten · ${euro(item.price_cents)} · ${item.active ? 'Aktiv' : 'Deaktiviert'}</span></div><div class="row-actions"><button class="mini" data-edit-service="${item.id}">Bearbeiten</button><button class="mini bad" data-delete-service="${item.id}">Löschen</button></div></div>`).join('') || '<div class="empty">Keine Leistungen vorhanden.</div>'}</div></div>`;
   $('#newService').onclick = () => openServiceDialog();
   $$('[data-edit-service]').forEach((button) => button.onclick = () => openServiceDialog(button.dataset.editService));
   $$('[data-delete-service]').forEach((button) => button.onclick = () => deleteService(button.dataset.deleteService));
@@ -506,8 +576,8 @@ function fillAppointmentForm(item = null) {
   const activeServices = services.filter((service) => service.active || service.id === item?.service_id);
 
   $('#appointmentCustomer').innerHTML = customers.map((profile) => `<option value="${profile.id}">${escapeHtml(profile.full_name)}</option>`).join('');
-  $('#appointmentEmployee').innerHTML = employees.map((profile) => `<option value="${profile.id}">${escapeHtml(profile.full_name)}</option>`).join('');
-  $('#appointmentService').innerHTML = activeServices.map((service) => `<option value="${service.id}">${escapeHtml(service.name)} (${service.duration_minutes} Min.)</option>`).join('');
+  $('#appointmentEmployee').innerHTML = employees.map((profile) => `<option value="${profile.id}">${escapeHtml(profile.full_name)} · ${roleName(profile.role)}</option>`).join('');
+  $('#appointmentService').innerHTML = activeServices.map((service) => `<option value="${service.id}">${escapeHtml(service.name)} (${service.duration_minutes} Min. · ${euro(service.price_cents)})</option>`).join('');
 
   $('#appointmentId').value = item?.id || '';
   $('#appointmentCustomer').value = item?.customer_id || (currentProfile.role === 'customer' ? currentProfile.id : customers[0]?.id || '');
@@ -517,9 +587,13 @@ function fillAppointmentForm(item = null) {
   $('#appointmentTime').value = item?.appointment_time?.slice(0, 5) || '10:00';
   $('#appointmentStatus').value = item?.status || (currentProfile.role === 'customer' ? 'requested' : 'confirmed');
   $('#appointmentNote').value = item?.note || '';
+  $('#appointmentReminder').value = String(item?.reminder_minutes || 30);
+  const price = item?.price_cents ?? serviceById($('#appointmentService').value).price_cents ?? 0;
+  $('#appointmentPrice').value = (Number(price) / 100).toFixed(2);
 
   $('#appointmentCustomer').disabled = currentProfile.role === 'customer';
   $('#appointmentEmployee').disabled = currentProfile.role === 'employee';
+  $('#appointmentPrice').readOnly = currentProfile.role === 'customer';
   $('#statusWrap').classList.toggle('hidden', currentProfile.role === 'customer');
 }
 
@@ -542,45 +616,33 @@ async function saveAppointment(event) {
     appointment_date: $('#appointmentDate').value,
     appointment_time: $('#appointmentTime').value,
     status: currentProfile.role === 'customer' ? 'requested' : $('#appointmentStatus').value,
-    note: $('#appointmentNote').value.trim()
+    note: $('#appointmentNote').value.trim(),
+    reminder_minutes: Number($('#appointmentReminder').value || 30),
+    price_cents: Math.max(0, Math.round(Number($('#appointmentPrice').value || 0) * 100))
   };
 
   if (!payload.customer_id) { setBusy(form, false); return toast('Bitte zuerst ein Kundenkonto auswählen oder erstellen.'); }
   if (!payload.employee_id) { setBusy(form, false); return toast('Bitte einen Mitarbeiter oder Administrator auswählen.'); }
   if (!payload.service_id) { setBusy(form, false); return toast('Bitte zuerst eine Leistung anlegen.'); }
 
-  // Soforte Prüfung mit den bereits geladenen Terminen. Dadurch entfällt eine zusätzliche langsame Datenbankabfrage.
   const conflict = appointments.some((item) =>
-    item.id !== id &&
-    item.employee_id === payload.employee_id &&
-    item.appointment_date === payload.appointment_date &&
-    item.appointment_time.slice(0, 5) === payload.appointment_time.slice(0, 5) &&
-    !['rejected', 'cancelled'].includes(item.status)
+    item.id !== id && item.employee_id === payload.employee_id && item.appointment_date === payload.appointment_date &&
+    item.appointment_time.slice(0, 5) === payload.appointment_time.slice(0, 5) && !['rejected', 'cancelled'].includes(item.status)
   );
-  if (conflict) {
-    setBusy(form, false);
-    return toast('Diese Uhrzeit ist bei diesem Mitarbeiter bereits belegt.');
-  }
+  if (conflict) { setBusy(form, false); return toast('Diese Uhrzeit ist bei diesem Mitarbeiter bereits belegt.'); }
 
   try {
-    const query = id
-      ? sb.from('appointments').update(payload).eq('id', id).select('*').single()
-      : sb.from('appointments').insert(payload).select('*').single();
+    const query = id ? sb.from('appointments').update(payload).eq('id', id).select('*').single() : sb.from('appointments').insert(payload).select('*').single();
     const result = await withTimeout(query, 15000);
     if (result.error) throw result.error;
-
-    if (id) appointments = appointments.map((item) => item.id === id ? result.data : item);
-    else appointments.push(result.data);
+    if (id) appointments = appointments.map((item) => item.id === id ? result.data : item); else appointments.push(result.data);
     appointments.sort((a, b) => `${a.appointment_date}${a.appointment_time}`.localeCompare(`${b.appointment_date}${b.appointment_time}`));
-
     $('#appointmentDialog').close();
     renderPage();
-    toast(currentProfile.role === 'customer' ? 'Anfrage wurde sofort gesendet.' : 'Termin wurde sofort gespeichert.');
-  } catch (error) {
-    toast(error.message || 'Termin konnte nicht gespeichert werden.');
-  } finally {
-    setBusy(form, false);
-  }
+    checkAppointmentReminders();
+    toast(currentProfile.role === 'customer' ? 'Anfrage wurde gesendet.' : 'Termin wurde gespeichert.');
+  } catch (error) { toast(error.message || 'Termin konnte nicht gespeichert werden.'); }
+  finally { setBusy(form, false); }
 }
 
 async function setAppointmentStatus(id, status) {
@@ -725,6 +787,7 @@ function openServiceDialog(id = null) {
   $('#serviceId').value = item?.id || '';
   $('#serviceName').value = item?.name || '';
   $('#serviceDuration').value = item?.duration_minutes || 30;
+  $('#servicePrice').value = (Number(item?.price_cents || 0) / 100).toFixed(2);
   $('#serviceActive').checked = item?.active ?? true;
   $('#serviceDialog').showModal();
 }
@@ -736,6 +799,7 @@ async function saveService(event) {
   const payload = {
     name: $('#serviceName').value.trim(),
     duration_minutes: Number($('#serviceDuration').value),
+    price_cents: Math.max(0, Math.round(Number($('#servicePrice').value || 0) * 100)),
     active: $('#serviceActive').checked
   };
   const result = id ? await sb.from('services').update(payload).eq('id', id) : await sb.from('services').insert(payload);
@@ -767,6 +831,198 @@ async function saveOwnProfile(event) {
   $('#userName').textContent = currentProfile.full_name;
   $('#userAvatar').textContent = currentProfile.full_name[0].toUpperCase();
 }
+
+
+function calendarPeriodLabel() {
+  const d = calendarCursor;
+  if (calendarView === 'day') return new Intl.DateTimeFormat('de-DE',{weekday:'long',day:'2-digit',month:'long',year:'numeric'}).format(d);
+  if (calendarView === 'week') {
+    const a=startOfWeek(d), b=addCalendarDays(a,6);
+    return `${new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit'}).format(a)} – ${new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'}).format(b)}`;
+  }
+  if (calendarView === 'month') return new Intl.DateTimeFormat('de-DE',{month:'long',year:'numeric'}).format(d);
+  return String(d.getFullYear());
+}
+
+function moveCalendar(direction) {
+  if (calendarView === 'day') calendarCursor = addCalendarDays(calendarCursor, direction);
+  if (calendarView === 'week') calendarCursor = addCalendarDays(calendarCursor, direction * 7);
+  if (calendarView === 'month') calendarCursor = addMonths(calendarCursor, direction);
+  if (calendarView === 'year') calendarCursor = addYears(calendarCursor, direction);
+  renderPage();
+}
+
+function calendarEventHtml(item, compact=false) {
+  const customer = profileById(item.customer_id);
+  const label = currentProfile.role === 'customer' ? profileById(item.employee_id).full_name : customer.full_name;
+  return `<button class="cal-event ${item.status}" data-calendar-appointment="${item.id}" title="${escapeHtml(serviceById(item.service_id).name)}">
+    <b>${compact ? '' : `${item.appointment_time.slice(0,5)} · `}${escapeHtml(serviceById(item.service_id).name)}</b>
+    ${compact ? '' : `<small>${escapeHtml(label)} · ${euro(item.price_cents)}</small>`}
+  </button>`;
+}
+
+function calendarViewHtml() {
+  const active = appointments.filter((item)=>!['rejected','cancelled'].includes(item.status));
+  if (calendarView === 'day') {
+    const key=iso(calendarCursor); const list=active.filter((a)=>a.appointment_date===key).sort((a,b)=>a.appointment_time.localeCompare(b.appointment_time));
+    return `<div class="day-agenda">${list.length?list.map((a)=>calendarEventHtml(a)).join(''):'<div class="empty">An diesem Tag gibt es keine Termine.</div>'}</div>`;
+  }
+  if (calendarView === 'week') {
+    const start=startOfWeek(calendarCursor);
+    const days=Array.from({length:7},(_,i)=>addCalendarDays(start,i));
+    return `<div class="calendar week-seven">${days.map((d)=>{const key=iso(d);const list=active.filter((a)=>a.appointment_date===key).sort((a,b)=>a.appointment_time.localeCompare(b.appointment_time));return `<section class="day ${sameDay(d,new Date())?'today-cell':''}"><div class="day-head"><strong>${new Intl.DateTimeFormat('de-DE',{weekday:'short'}).format(d)}</strong><span>${new Intl.DateTimeFormat('de-DE',{day:'2-digit',month:'2-digit'}).format(d)}</span></div>${list.length?list.map((a)=>calendarEventHtml(a)).join(''):'<div class="calendar-free">Frei</div>'}</section>`}).join('')}</div>`;
+  }
+  if (calendarView === 'month') {
+    const first=new Date(calendarCursor.getFullYear(),calendarCursor.getMonth(),1,12); const start=startOfWeek(first);
+    const days=Array.from({length:42},(_,i)=>addCalendarDays(start,i));
+    return `<div class="month-grid"><div class="month-weekdays">${['Mo','Di','Mi','Do','Fr','Sa','So'].map(x=>`<b>${x}</b>`).join('')}</div><div class="month-days">${days.map((d)=>{const key=iso(d);const list=active.filter((a)=>a.appointment_date===key);const outside=d.getMonth()!==calendarCursor.getMonth();return `<div class="month-day ${outside?'outside':''} ${sameDay(d,new Date())?'today-cell':''}"><span class="date-number">${d.getDate()}</span><div class="month-events">${list.slice(0,3).map((a)=>calendarEventHtml(a,true)).join('')}${list.length>3?`<small>+${list.length-3} weitere</small>`:''}</div></div>`}).join('')}</div></div>`;
+  }
+  const year=calendarCursor.getFullYear();
+  return `<div class="year-grid">${Array.from({length:12},(_,m)=>{const d=new Date(year,m,1,12);const count=active.filter((a)=>a.appointment_date.startsWith(`${year}-${String(m+1).padStart(2,'0')}`)).length;const daysInMonth=new Date(year,m+1,0).getDate();const firstOffset=(new Date(year,m,1).getDay()+6)%7;const cells=[...Array(firstOffset).fill(null),...Array.from({length:daysInMonth},(_,i)=>i+1)];return `<button class="year-month" data-jump-month="${m}"><div class="year-month-head"><b>${new Intl.DateTimeFormat('de-DE',{month:'long'}).format(d)}</b><span>${count} Termine</span></div><div class="mini-month"><div class="mini-weekdays">${['M','D','M','D','F','S','S'].map(x=>`<i>${x}</i>`).join('')}</div><div class="mini-days">${cells.map(day=>day===null?'<i></i>':`<i class="${active.some(a=>a.appointment_date===`${year}-${String(m+1).padStart(2,'0')}-${String(day).padStart(2,'0')}`)?'has-event':''}">${day}</i>`).join('')}</div></div></button>`}).join('')}</div>`;
+}
+
+document.addEventListener('click',(event)=>{
+  const jump=event.target.closest('[data-jump-month]');
+  if (jump) { calendarCursor=new Date(calendarCursor.getFullYear(),Number(jump.dataset.jumpMonth),1,12); calendarView='month'; renderPage(); }
+});
+
+function startRealtimeSync() {
+  if (!sb || realtimeChannel) return;
+  realtimeChannel = sb.channel(`termin-live-${session.user.id}`)
+    .on('postgres_changes',{event:'*',schema:'public',table:'appointments'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'services'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'chat_messages'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'chat_threads'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'online_forms'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'form_submissions'},scheduleRealtimeReload)
+    .subscribe();
+}
+
+function scheduleRealtimeReload() {
+  clearTimeout(realtimeDebounce);
+  realtimeDebounce=setTimeout(async()=>{ if (!currentProfile) return; await loadData(); renderPage(); checkAppointmentReminders(); },450);
+}
+
+function startBackgroundTasks() {
+  if (backgroundTimer) clearInterval(backgroundTimer);
+  backgroundTimer=setInterval(async()=>{
+    if (!currentProfile) return;
+    await loadData();
+    if (currentPage==='calendar' || currentPage==='chats' || currentPage==='notifications') renderPage();
+    checkAppointmentReminders();
+  },60000);
+}
+
+async function checkAppointmentReminders() {
+  if (!currentProfile || !sb) return;
+  const now=Date.now();
+  const relevant=appointments.filter((a)=>a.status==='confirmed' && (a.customer_id===currentProfile.id || a.employee_id===currentProfile.id));
+  for (const item of relevant) {
+    const diff=(localDateTime(item).getTime()-now)/60000;
+    const mins=Number(item.reminder_minutes || 30);
+    if (diff>mins || diff<0) continue;
+    const dedupe=`appointment:${item.id}:soon`;
+    if (notifications.some((n)=>n.dedupe_key===dedupe)) continue;
+    const title='Termin steht bald an';
+    const body=`${formatDate(item.appointment_date)} um ${item.appointment_time.slice(0,5)} · ${serviceById(item.service_id).name}`;
+    const {data,error}=await sb.from('app_notifications').insert({user_id:currentProfile.id,appointment_id:item.id,type:'appointment_reminder',title,body,dedupe_key:dedupe}).select('*').single();
+    if (!error && data) {
+      notifications.unshift(data); toast(body);
+      if ('Notification' in window && Notification.permission==='granted') new Notification(title,{body});
+    }
+  }
+}
+
+function renderNotifications(content) {
+  setTitle('ERINNERUNGEN','Benachrichtigungen');
+  const unread=notifications.filter(n=>!n.read).length;
+  content.innerHTML=`<div class="hero"><div><h3>Erinnerungen</h3><p>Terminerinnerungen erscheinen automatisch, sobald die Website geöffnet ist.</p></div><div class="hero-actions"><button id="enableNotifications" class="btn primary">Browser-Erinnerungen aktivieren</button>${unread?`<button id="markNotifications" class="btn ghost">Alle als gelesen</button>`:''}</div></div><div class="card notification-list">${notifications.length?notifications.map(n=>`<button class="notification-item ${n.read?'':'unread'}" data-read-notification="${n.id}"><div><b>${escapeHtml(n.title)}</b><p>${escapeHtml(n.body)}</p></div><small>${new Intl.DateTimeFormat('de-DE',{dateStyle:'short',timeStyle:'short'}).format(new Date(n.created_at))}</small></button>`).join(''):'<div class="empty">Noch keine Erinnerungen.</div>'}</div>`;
+  $('#enableNotifications').onclick=async()=>{ if (!('Notification' in window)) return toast('Dieser Browser unterstützt keine Benachrichtigungen.'); const perm=await Notification.requestPermission(); toast(perm==='granted'?'Browser-Erinnerungen sind aktiv.':'Benachrichtigungen wurden nicht erlaubt.'); };
+  const mark=$('#markNotifications'); if(mark) mark.onclick=async()=>{await sb.from('app_notifications').update({read:true}).eq('user_id',currentProfile.id); notifications=notifications.map(n=>({...n,read:true}));renderNotifications(content);};
+  $$('[data-read-notification]').forEach(btn=>btn.onclick=async()=>{await sb.from('app_notifications').update({read:true}).eq('id',btn.dataset.readNotification);const n=notifications.find(x=>x.id===btn.dataset.readNotification);if(n)n.read=true;renderNotifications(content);});
+}
+
+function threadPeople(thread) {
+  return { customer: profileById(thread.customer_id), employee: profileById(thread.employee_id) };
+}
+
+async function ensureChatThread(customerId, employeeId, appointmentId=null) {
+  let thread=chatThreads.find(t=>t.customer_id===customerId && t.employee_id===employeeId && (appointmentId ? t.appointment_id===appointmentId : !t.appointment_id));
+  if (thread) return thread;
+  const {data,error}=await sb.from('chat_threads').insert({customer_id:customerId,employee_id:employeeId,appointment_id:appointmentId,created_by:currentProfile.id}).select('*').single();
+  if (error) throw error;
+  chatThreads.unshift(data); return data;
+}
+
+async function openChatForAppointment(id) {
+  const appointment=appointments.find(a=>a.id===id); if(!appointment)return toast('Termin nicht gefunden.');
+  try { const thread=await ensureChatThread(appointment.customer_id,appointment.employee_id,appointment.id); activeChatThreadId=thread.id; currentPage='chats'; renderNav(); await loadData(); renderPage(); }
+  catch(error){toast(error.message);}
+}
+
+function renderChats(content) {
+  setTitle('NACHRICHTEN',currentProfile.role==='admin'?'Alle Chats':'Chats');
+  if (!activeChatThreadId && chatThreads[0]) activeChatThreadId=chatThreads[0].id;
+  const active=chatThreads.find(t=>t.id===activeChatThreadId);
+  const possibleCustomers=profiles.filter(p=>p.role==='customer'&&p.active);
+  const possibleEmployees=profiles.filter(p=>['employee','admin'].includes(p.role)&&p.active);
+  content.innerHTML=`<div class="chat-layout"><aside class="chat-list"><div class="chat-list-head"><div><h3>${currentProfile.role==='admin'?'Alle Unterhaltungen':'Nachrichten'}</h3><small>${chatThreads.length} Chats</small></div><button id="newChatBtn" class="mini">+ Neu</button></div><div class="chat-thread-list">${chatThreads.length?chatThreads.map(t=>{const ppl=threadPeople(t);const msgs=chatMessages.filter(m=>m.thread_id===t.id);const last=msgs.at(-1);return `<button class="chat-thread ${t.id===activeChatThreadId?'active':''}" data-thread="${t.id}"><b>${escapeHtml(ppl.customer.full_name)} ↔ ${escapeHtml(ppl.employee.full_name)}</b><small>${escapeHtml(last?.body||'Noch keine Nachricht')}</small></button>`}).join(''):'<div class="empty">Noch keine Chats.</div>'}</div></aside><section class="chat-window">${active?chatWindowHtml(active):'<div class="empty">Wähle einen Chat aus.</div>'}</section></div>`;
+  $$('[data-thread]').forEach(btn=>btn.onclick=()=>{activeChatThreadId=btn.dataset.thread;renderChats(content);});
+  $('#newChatBtn').onclick=async()=>{
+    let customerId=currentProfile.role==='customer'?currentProfile.id:null; let employeeId=currentProfile.role==='employee'?currentProfile.id:null;
+    if(currentProfile.role==='admin'||currentProfile.role==='employee'){const name=prompt(`Kundenname oder E-Mail:\n${possibleCustomers.slice(0,12).map(p=>p.full_name).join(', ')}`)||'';const p=possibleCustomers.find(x=>`${x.full_name} ${x.email}`.toLowerCase().includes(name.toLowerCase()));if(!p)return toast('Kunde nicht gefunden.');customerId=p.id;}
+    if(currentProfile.role==='admin'||currentProfile.role==='customer'){const name=prompt(`Mitarbeitername:\n${possibleEmployees.map(p=>p.full_name).join(', ')}`)||'';const p=possibleEmployees.find(x=>x.full_name.toLowerCase().includes(name.toLowerCase()));if(!p)return toast('Mitarbeiter nicht gefunden.');employeeId=p.id;}
+    try{const t=await ensureChatThread(customerId,employeeId,null);activeChatThreadId=t.id;await loadData();renderChats(content);}catch(e){toast(e.message);}
+  };
+  const form=$('#chatSendForm'); if(form) form.onsubmit=sendChatMessage;
+}
+
+function chatWindowHtml(thread) {
+  const ppl=threadPeople(thread); const msgs=chatMessages.filter(m=>m.thread_id===thread.id);
+  return `<div class="chat-window-head"><div><h3>${escapeHtml(ppl.customer.full_name)} ↔ ${escapeHtml(ppl.employee.full_name)}</h3><small>${thread.appointment_id?'Termin-Chat':'Allgemeiner Chat'}${currentProfile.role==='admin'?' · Admin kann mitlesen':''}</small></div></div><div id="chatMessages" class="chat-messages">${msgs.length?msgs.map(m=>`<div class="message ${m.sender_id===currentProfile.id?'mine':''}"><b>${escapeHtml(profileById(m.sender_id).full_name)}</b><p>${escapeHtml(m.body)}</p><small>${new Intl.DateTimeFormat('de-DE',{hour:'2-digit',minute:'2-digit',day:'2-digit',month:'2-digit'}).format(new Date(m.created_at))}</small></div>`).join(''):'<div class="empty">Schreibe die erste Nachricht.</div>'}</div><form id="chatSendForm" class="chat-compose"><input id="chatText" maxlength="2000" required placeholder="Nachricht schreiben …"><button class="btn primary">Senden</button></form>`;
+}
+
+async function sendChatMessage(event) {
+  event.preventDefault(); const input=$('#chatText');const body=input.value.trim();if(!body||!activeChatThreadId)return;
+  setBusy(event.currentTarget,true);
+  const {data,error}=await sb.from('chat_messages').insert({thread_id:activeChatThreadId,sender_id:currentProfile.id,body}).select('*').single();
+  setBusy(event.currentTarget,false); if(error)return toast(error.message); chatMessages.push(data); input.value='';
+  await sb.from('chat_threads').update({updated_at:new Date().toISOString()}).eq('id',activeChatThreadId); renderPage();
+  requestAnimationFrame(()=>{const box=$('#chatMessages');if(box)box.scrollTop=box.scrollHeight;});
+}
+
+function renderForms(content) {
+  setTitle('FORMULARE','Online-Formulare');
+  const visible=forms.filter(f=>currentProfile.role==='admin'||f.published);
+  content.innerHTML=`<div class="hero"><div><h3>Online-Formulare</h3><p>${currentProfile.role==='admin'?'Formulare erstellen, veröffentlichen und Antworten ansehen.':'Formulare direkt online ausfüllen.'}</p></div>${currentProfile.role==='admin'?'<button id="newOnlineForm" class="btn primary">+ Formular</button>':''}</div><div class="forms-grid">${visible.length?visible.map(f=>{const subs=formSubmissions.filter(s=>s.form_id===f.id);const own=subs.find(s=>s.user_id===currentProfile.id);return `<div class="card form-card"><div class="form-card-head"><div><h3>${escapeHtml(f.title)}</h3><p>${escapeHtml(f.description||'')}</p></div><span class="badge ${f.published?'active':'inactive'}">${f.published?'Online':'Entwurf'}</span></div><p class="muted">${Array.isArray(f.questions)?f.questions.length:0} Fragen${currentProfile.role==='admin'?` · ${subs.length} Antworten`:own?' · Bereits ausgefüllt':''}</p><div class="row-actions"><button class="btn primary" data-fill-form="${f.id}">${own&&currentProfile.role!=='admin'?'Erneut ausfüllen':'Ausfüllen'}</button>${currentProfile.role==='admin'?`<button class="mini" data-edit-form="${f.id}">Bearbeiten</button><button class="mini" data-submissions="${f.id}">Antworten (${subs.length})</button><button class="mini bad" data-delete-form="${f.id}">Löschen</button>`:''}</div></div>`}).join(''):'<div class="card empty">Keine Formulare vorhanden.</div>'}</div>`;
+  const newBtn=$('#newOnlineForm');if(newBtn)newBtn.onclick=()=>openOnlineFormDialog();
+  $$('[data-fill-form]').forEach(btn=>btn.onclick=()=>openFillForm(btn.dataset.fillForm));
+  $$('[data-edit-form]').forEach(btn=>btn.onclick=()=>openOnlineFormDialog(btn.dataset.editForm));
+  $$('[data-submissions]').forEach(btn=>btn.onclick=()=>showFormSubmissions(btn.dataset.submissions));
+  $$('[data-delete-form]').forEach(btn=>btn.onclick=()=>deleteOnlineForm(btn.dataset.deleteForm));
+}
+
+function openOnlineFormDialog(id=null) {
+  const f=id?forms.find(x=>x.id===id):null;$('#formDialogTitle').textContent=f?'Formular bearbeiten':'Formular erstellen';$('#formId').value=f?.id||'';$('#formTitle').value=f?.title||'';$('#formDescription').value=f?.description||'';$('#formQuestions').value=Array.isArray(f?.questions)?f.questions.join('\n'):'';$('#formPublished').checked=f?.published??true;$('#formDialog').showModal();
+}
+
+async function saveOnlineForm(event) {
+  event.preventDefault();setBusy(event.currentTarget,true);const id=$('#formId').value;const questions=$('#formQuestions').value.split('\n').map(x=>x.trim()).filter(Boolean);const payload={title:$('#formTitle').value.trim(),description:$('#formDescription').value.trim(),questions,published:$('#formPublished').checked,created_by:currentProfile.id};const result=id?await sb.from('online_forms').update(payload).eq('id',id):await sb.from('online_forms').insert(payload);setBusy(event.currentTarget,false);if(result.error)return toast(result.error.message);$('#formDialog').close();await reloadAndRender('Formular wurde gespeichert.');
+}
+
+function openFillForm(id) {
+  const f=forms.find(x=>x.id===id);if(!f)return;$('#fillFormId').value=f.id;$('#fillFormTitle').textContent=f.title;$('#fillFormDescription').textContent=f.description||'';$('#fillFormQuestions').innerHTML=(f.questions||[]).map((q,i)=>`<label>${escapeHtml(q)}<textarea data-form-answer="${i}" rows="2" required></textarea></label>`).join('');$('#fillFormDialog').showModal();
+}
+
+async function submitOnlineForm(event) {
+  event.preventDefault();setBusy(event.currentTarget,true);const id=$('#fillFormId').value;const f=forms.find(x=>x.id===id);const answers=(f.questions||[]).map((question,i)=>({question,answer:$(`[data-form-answer="${i}"]`).value.trim()}));const {error}=await sb.from('form_submissions').insert({form_id:id,user_id:currentProfile.id,answers});setBusy(event.currentTarget,false);if(error)return toast(error.message);$('#fillFormDialog').close();await reloadAndRender('Formular wurde abgesendet.');
+}
+
+function showFormSubmissions(id) {
+  const f=forms.find(x=>x.id===id);const subs=formSubmissions.filter(s=>s.form_id===id);$('#submissionDialogTitle').textContent=`${f?.title||'Formular'} – Antworten`;$('#submissionDialogContent').innerHTML=subs.length?subs.map(s=>`<button class="submission-card" data-show-submission="${s.id}"><b>${escapeHtml(profileById(s.user_id).full_name)}</b><span>${new Intl.DateTimeFormat('de-DE',{dateStyle:'medium',timeStyle:'short'}).format(new Date(s.submitted_at))}</span></button>`).join(''):'<div class="empty">Noch keine Antworten.</div>';$('#submissionDialog').showModal();$$('[data-show-submission]').forEach(btn=>btn.onclick=()=>{const sub=formSubmissions.find(x=>x.id===btn.dataset.showSubmission);$('#submissionDialogContent').innerHTML=`<button id="backSubs" class="mini">← Zurück</button><h4>${escapeHtml(profileById(sub.user_id).full_name)}</h4><div class="answer-list">${(sub.answers||[]).map(a=>`<div><b>${escapeHtml(a.question)}</b><p>${escapeHtml(a.answer||'–')}</p></div>`).join('')}</div>`;$('#backSubs').onclick=()=>showFormSubmissions(id);});
+}
+
+async function deleteOnlineForm(id) { if(!confirm('Formular wirklich löschen? Auch Antworten werden gelöscht.'))return;const {error}=await sb.from('online_forms').delete().eq('id',id);if(error)return toast(error.message);await reloadAndRender('Formular wurde gelöscht.'); }
 
 async function reloadAndRender(message = '') {
   $('#pageContent').innerHTML = '<div class="loading">Daten werden aktualisiert …</div>';

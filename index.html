@@ -8,14 +8,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="styles.css?v=7">
+  <link rel="stylesheet" href="styles.css?v=10">
 </head>
 <body>
   <div id="toast" class="toast" aria-live="polite"></div>
 
   <main id="authView" class="login-shell">
     <section class="login-card">
-      <img src="logo-safa-yildiz-icon.png?v=7" alt="Safa Yildiz Vertragsservice Logo" style="display:block;width:112px;height:112px;object-fit:contain;margin:0 auto 14px;border-radius:22px;background:#fff;">
+      <img src="logo-safa-yildiz-icon.png?v=10" alt="Safa Yildiz Vertragsservice Logo" style="display:block;width:112px;height:112px;object-fit:contain;margin:0 auto 14px;border-radius:22px;background:#fff;">
       <p class="eyebrow">SAFA YILDIZ</p>
       <h1>Terminplaner</h1>
       <p class="muted">Sichere Konten für Admin, Mitarbeiter und Kunden.</p>
@@ -68,7 +68,7 @@
     <aside id="sidebar" class="sidebar">
       <div>
         <div class="brand">
-          <img src="logo-safa-yildiz-icon.png?v=7" alt="Safa Yildiz Logo" style="display:block;width:46px;height:46px;object-fit:contain;border-radius:12px;background:#fff;flex:none;">
+          <img src="logo-safa-yildiz-icon.png?v=10" alt="Safa Yildiz Logo" style="display:block;width:46px;height:46px;object-fit:contain;border-radius:12px;background:#fff;flex:none;">
           <div><strong>Safa Yildiz</strong><span>Terminplaner</span></div>
         </div>
         <nav id="navMenu"></nav>
@@ -104,7 +104,17 @@
         <label>Mitarbeiter<select id="appointmentEmployee" required></select></label>
         <label>Leistung<select id="appointmentService" required></select></label>
         <label>Datum<input id="appointmentDate" type="date" required></label>
-        <label>Uhrzeit<input id="appointmentTime" type="time" min="08:00" max="20:00" required></label>
+        <label>Uhrzeit<input id="appointmentTime" type="time" min="00:00" max="23:59" required></label>
+        <label>Preis (€)<input id="appointmentPrice" type="number" min="0" step="0.01" inputmode="decimal"></label>
+        <label>Erinnerung
+          <select id="appointmentReminder">
+            <option value="15">15 Minuten vorher</option>
+            <option value="30" selected>30 Minuten vorher</option>
+            <option value="60">1 Stunde vorher</option>
+            <option value="120">2 Stunden vorher</option>
+            <option value="1440">1 Tag vorher</option>
+          </select>
+        </label>
         <label id="statusWrap">Status
           <select id="appointmentStatus">
             <option value="requested">Angefragt</option>
@@ -164,6 +174,7 @@
       <input id="serviceId" type="hidden">
       <label>Name<input id="serviceName" required></label>
       <label>Dauer in Minuten<input id="serviceDuration" required type="number" min="5" max="480" step="5"></label>
+      <label>Preis (€)<input id="servicePrice" required type="number" min="0" step="0.01" inputmode="decimal" value="0"></label>
       <label class="check-row"><input id="serviceActive" type="checkbox" checked><span>Aktiv</span></label>
       <div class="actions">
         <button type="button" class="btn ghost" data-close="serviceDialog">Abbrechen</button>
@@ -195,8 +206,42 @@
     </div>
   </dialog>
 
+  <dialog id="formDialog" class="modal">
+    <form id="formBuilderForm" class="modal-card">
+      <div class="modal-head">
+        <div><p class="eyebrow">FORMULAR</p><h3 id="formDialogTitle">Formular erstellen</h3></div>
+        <button type="button" class="x" data-close="formDialog">×</button>
+      </div>
+      <input id="formId" type="hidden">
+      <label>Titel<input id="formTitle" required placeholder="z. B. Erstaufnahme"></label>
+      <label>Beschreibung<textarea id="formDescription" rows="3" placeholder="Kurze Erklärung"></textarea></label>
+      <label>Fragen <span class="optional">(eine Frage pro Zeile)</span><textarea id="formQuestions" rows="8" placeholder="Vor- und Nachname
+Anliegen
+Bemerkungen"></textarea></label>
+      <label class="check-row"><input id="formPublished" type="checkbox" checked><span>Veröffentlicht</span></label>
+      <div class="actions"><button type="button" class="btn ghost" data-close="formDialog">Abbrechen</button><button class="btn primary">Speichern</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="fillFormDialog" class="modal">
+    <form id="fillFormForm" class="modal-card">
+      <div class="modal-head"><div><p class="eyebrow">ONLINE-FORMULAR</p><h3 id="fillFormTitle">Formular ausfüllen</h3></div><button type="button" class="x" data-close="fillFormDialog">×</button></div>
+      <input id="fillFormId" type="hidden">
+      <p id="fillFormDescription" class="muted"></p>
+      <div id="fillFormQuestions" class="stack"></div>
+      <div class="actions"><button type="button" class="btn ghost" data-close="fillFormDialog">Abbrechen</button><button class="btn primary">Absenden</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="submissionDialog" class="modal">
+    <div class="modal-card">
+      <div class="modal-head"><div><p class="eyebrow">ANTWORTEN</p><h3 id="submissionDialogTitle">Formularantwort</h3></div><button type="button" class="x" data-close="submissionDialog">×</button></div>
+      <div id="submissionDialogContent"></div>
+    </div>
+  </dialog>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="config.js"></script>
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
