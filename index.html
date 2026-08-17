@@ -254,6 +254,46 @@ Bemerkungen"></textarea></label>
   </dialog>
 
 
+
+  <dialog id="templateDesignerDialog" class="modal template-editor-modal">
+    <div class="modal-card template-editor-card">
+      <div class="modal-head">
+        <div><p class="eyebrow">VORLAGEN-EDITOR</p><h3 id="templateDesignerTitle">Vorlage einrichten</h3></div>
+        <button type="button" class="x" data-close="templateDesignerDialog">×</button>
+      </div>
+      <div class="template-editor-layout">
+        <aside class="template-editor-tools">
+          <button id="addTemplateField" type="button" class="btn primary full">+ Textfeld auf Linie setzen</button>
+          <p class="field-hint">Danach direkt auf die gewünschte Linie in der Vorlage klicken. Textfelder lassen sich wie in Canva verschieben und größer/kleiner ziehen.</p>
+          <div id="templateFieldInspector" class="template-field-inspector hidden">
+            <label>Feldname<input id="designerFieldLabel" placeholder="z. B. Vor- und Nachname"></label>
+            <label>Feldart<select id="designerFieldType"><option value="text">Text</option><option value="date">Datum</option><option value="number">Zahl</option><option value="textarea">Mehrzeiliger Text</option></select></label>
+            <label>Schriftgröße<input id="designerFieldFontSize" type="number" min="8" max="40" step="1" value="16"></label>
+            <label class="check-row"><input id="designerFieldRequired" type="checkbox"><span>Pflichtfeld</span></label>
+            <button id="deleteTemplateField" type="button" class="btn danger full">Feld löschen</button>
+          </div>
+          <div class="template-editor-tip"><b>Tipp</b><span>Ziehe das blaue Feld genau über die Linie. Unten rechts am Feld kannst du die Breite und Höhe ändern.</span></div>
+        </aside>
+        <div id="templateDesignerPages" class="template-pages"><div class="loading">Vorlage wird geladen …</div></div>
+      </div>
+      <div class="actions"><button type="button" class="btn ghost" data-close="templateDesignerDialog">Abbrechen</button><button id="saveTemplateDesign" type="button" class="btn primary">Editor speichern</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="templateFillDialog" class="modal template-editor-modal">
+    <form id="templateFillForm" class="modal-card template-editor-card">
+      <div class="modal-head">
+        <div><p class="eyebrow">DIREKT AUSFÜLLEN</p><h3 id="templateFillTitle">Formular ausfüllen</h3></div>
+        <button type="button" class="x" data-close="templateFillDialog">×</button>
+      </div>
+      <p id="templateFillDescription" class="muted"></p>
+      <div class="template-fill-note">Klicke direkt in die Felder auf den Linien und schreibe hinein. Beim Absenden wird automatisch eine ausgefüllte PDF-Datei gespeichert.</div>
+      <div id="templateFillPages" class="template-pages"><div class="loading">Vorlage wird geladen …</div></div>
+      <div id="templateExtraQuestions" class="stack"></div>
+      <div class="actions"><button type="button" class="btn ghost" data-close="templateFillDialog">Abbrechen</button><button class="btn primary">Ausgefülltes Formular absenden</button></div>
+    </form>
+  </dialog>
+
   <dialog id="reminderDialog" class="modal">
     <form id="reminderForm" class="modal-card compact">
       <div class="modal-head">
@@ -268,8 +308,10 @@ Bemerkungen"></textarea></label>
     </form>
   </dialog>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="config.js?v=21"></script>
-  <script src="app.js?v=21"></script>
+  <script src="config.js?v=30"></script>
+  <script src="app.js?v=30"></script>
 </body>
 </html>

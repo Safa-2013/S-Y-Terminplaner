@@ -1374,6 +1374,495 @@ async function reloadAndRender(message = '') {
   if (message) toast(message);
 }
 
+
+// ===== V4: Direkt-in-der-Vorlage-Editor (Canva-/Photoshop-artig) =====
+let templateDesignerState = { form: null, fields: [], selectedId: null, addMode: false };
+let templateFillState = { form: null };
+
+function visualTemplateSupported(form) {
+  const mime = String(form?.file_mime || '').toLowerCase();
+  const name = String(form?.file_name || '').toLowerCase();
+  return mime === 'application/pdf' || mime === 'image/png' || mime === 'image/jpeg' || /\.(pdf|png|jpe?g)$/.test(name);
+}
+
+function templateFields(form) {
+  return Array.isArray(form?.template_fields) ? form.template_fields : [];
+}
+
+async function signedTemplateUrl(form, expires = 900) {
+  if (!form?.file_path) throw new Error('Für dieses Formular wurde keine Vorlage hochgeladen.');
+  const { data, error } = await sb.storage.from('forms').createSignedUrl(form.file_path, expires);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+function setupPdfJsWorker() {
+  if (!window.pdfjsLib) throw new Error('PDF-Anzeige konnte nicht geladen werden. Bitte die Seite neu laden.');
+  if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  }
+}
+
+async function renderTemplateBackground(form, container, mode = 'fill') {
+  container.innerHTML = '<div class="loading">Vorlage wird geladen …</div>';
+  const url = await signedTemplateUrl(form);
+  container.innerHTML = '';
+  const mime = String(form.file_mime || '').toLowerCase();
+  const name = String(form.file_name || '').toLowerCase();
+  const isPdf = mime === 'application/pdf' || name.endsWith('.pdf');
+
+  if (isPdf) {
+    setupPdfJsWorker();
+    const pdf = await window.pdfjsLib.getDocument({ url }).promise;
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1.45 });
+      const wrapper = document.createElement('div');
+      wrapper.className = 'template-page';
+      wrapper.dataset.templatePage = String(pageNumber);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      canvas.setAttribute('aria-label', `Seite ${pageNumber}`);
+      const layer = document.createElement('div');
+      layer.className = 'template-overlay';
+      layer.dataset.templateLayer = String(pageNumber);
+      const badge = document.createElement('span');
+      badge.className = 'template-page-number';
+      badge.textContent = `Seite ${pageNumber}`;
+      wrapper.append(canvas, layer, badge);
+      container.appendChild(wrapper);
+      await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+      if (mode === 'designer') installDesignerPage(layer, pageNumber);
+    }
+    return;
+  }
+
+  if (mime.startsWith('image/') || /\.(png|jpe?g)$/.test(name)) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'template-page';
+    wrapper.dataset.templatePage = '1';
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = form.title || 'Formularvorlage';
+    await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(new Error('Bildvorlage konnte nicht geladen werden.')); });
+    const layer = document.createElement('div');
+    layer.className = 'template-overlay';
+    layer.dataset.templateLayer = '1';
+    const badge = document.createElement('span');
+    badge.className = 'template-page-number';
+    badge.textContent = 'Seite 1';
+    wrapper.append(img, layer, badge);
+    container.appendChild(wrapper);
+    if (mode === 'designer') installDesignerPage(layer, 1);
+    return;
+  }
+
+  throw new Error('Der Direkt-Editor unterstützt PDF, JPG und PNG. Word-Dateien können weiterhin normal geöffnet und zurückgesendet werden.');
+}
+
+function newTemplateField(page, x, y) {
+  return {
+    id: crypto.randomUUID(),
+    page,
+    label: 'Textfeld',
+    type: 'text',
+    required: false,
+    x: Math.max(0, Math.min(0.92, x)),
+    y: Math.max(0, Math.min(0.95, y)),
+    w: 0.34,
+    h: 0.045,
+    fontSize: 16 / 820
+  };
+}
+
+function installDesignerPage(layer, pageNumber) {
+  layer.onclick = (event) => {
+    if (!templateDesignerState.addMode || event.target !== layer) return;
+    const rect = layer.getBoundingClientRect();
+    const field = newTemplateField(
+      pageNumber,
+      (event.clientX - rect.left) / rect.width,
+      (event.clientY - rect.top) / rect.height
+    );
+    field.x = Math.min(field.x, 1 - field.w);
+    field.y = Math.min(field.y, 1 - field.h);
+    templateDesignerState.fields.push(field);
+    templateDesignerState.selectedId = field.id;
+    templateDesignerState.addMode = false;
+    updateAddFieldButton();
+    renderDesignerFields();
+    selectDesignerField(field.id);
+  };
+}
+
+function updateAddFieldButton() {
+  const button = $('#addTemplateField');
+  if (!button) return;
+  button.textContent = templateDesignerState.addMode ? 'Jetzt auf eine Linie klicken …' : '+ Textfeld auf Linie setzen';
+  button.classList.toggle('danger', templateDesignerState.addMode);
+  $$('.template-overlay').forEach(layer => layer.classList.toggle('add-mode', templateDesignerState.addMode));
+}
+
+function renderDesignerFields() {
+  $$('.design-field').forEach(el => el.remove());
+  for (const field of templateDesignerState.fields) {
+    const layer = $(`[data-template-layer="${field.page}"]`);
+    if (!layer) continue;
+    const box = document.createElement('div');
+    box.className = `design-field${field.id === templateDesignerState.selectedId ? ' selected' : ''}`;
+    box.dataset.designField = field.id;
+    box.style.left = `${field.x * 100}%`;
+    box.style.top = `${field.y * 100}%`;
+    box.style.width = `${field.w * 100}%`;
+    box.style.height = `${field.h * 100}%`;
+    const label = document.createElement('span');
+    label.className = 'design-field-label';
+    label.textContent = field.label || 'Textfeld';
+    label.style.fontSize = `${Math.max(10, (field.fontSize || 16/820) * layer.clientWidth)}px`;
+    const resize = document.createElement('span');
+    resize.className = 'design-resize';
+    box.append(label, resize);
+    layer.appendChild(box);
+    bindDesignerBox(box, resize, field, layer);
+  }
+}
+
+function bindDesignerBox(box, resize, field, layer) {
+  box.onclick = (event) => { event.stopPropagation(); selectDesignerField(field.id); };
+  box.onpointerdown = (event) => {
+    if (event.target === resize) return;
+    event.preventDefault(); event.stopPropagation(); selectDesignerField(field.id);
+    const rect = layer.getBoundingClientRect();
+    const startX = event.clientX, startY = event.clientY, ox = field.x, oy = field.y;
+    box.setPointerCapture?.(event.pointerId);
+    const move = (e) => {
+      field.x = Math.max(0, Math.min(1 - field.w, ox + (e.clientX - startX) / rect.width));
+      field.y = Math.max(0, Math.min(1 - field.h, oy + (e.clientY - startY) / rect.height));
+      box.style.left = `${field.x * 100}%`; box.style.top = `${field.y * 100}%`;
+    };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up, { once: true });
+  };
+  resize.onpointerdown = (event) => {
+    event.preventDefault(); event.stopPropagation(); selectDesignerField(field.id);
+    const rect = layer.getBoundingClientRect();
+    const startX = event.clientX, startY = event.clientY, ow = field.w, oh = field.h;
+    const move = (e) => {
+      field.w = Math.max(0.07, Math.min(1 - field.x, ow + (e.clientX - startX) / rect.width));
+      field.h = Math.max(0.025, Math.min(1 - field.y, oh + (e.clientY - startY) / rect.height));
+      box.style.width = `${field.w * 100}%`; box.style.height = `${field.h * 100}%`;
+    };
+    const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+    window.addEventListener('pointermove', move); window.addEventListener('pointerup', up, { once: true });
+  };
+}
+
+function selectDesignerField(id) {
+  templateDesignerState.selectedId = id;
+  const field = templateDesignerState.fields.find(item => item.id === id);
+  $('#templateFieldInspector').classList.toggle('hidden', !field);
+  $$('.design-field').forEach(el => el.classList.toggle('selected', el.dataset.designField === id));
+  if (!field) return;
+  $('#designerFieldLabel').value = field.label || '';
+  $('#designerFieldType').value = field.type || 'text';
+  $('#designerFieldRequired').checked = Boolean(field.required);
+  $('#designerFieldFontSize').value = String(Math.round((field.fontSize || 16/820) * 820));
+}
+
+function syncSelectedDesignerField() {
+  const field = templateDesignerState.fields.find(item => item.id === templateDesignerState.selectedId);
+  if (!field) return;
+  field.label = $('#designerFieldLabel').value.trim() || 'Textfeld';
+  field.type = $('#designerFieldType').value;
+  field.required = $('#designerFieldRequired').checked;
+  field.fontSize = Math.max(8, Math.min(40, Number($('#designerFieldFontSize').value || 16))) / 820;
+  renderDesignerFields();
+  selectDesignerField(field.id);
+}
+
+async function openTemplateDesigner(id) {
+  const form = forms.find(item => item.id === id);
+  if (!form || !form.file_path) return toast('Bitte zuerst eine PDF-, JPG- oder PNG-Vorlage hochladen.');
+  if (!visualTemplateSupported(form)) return toast('Der Direkt-Editor unterstützt PDF, JPG und PNG.');
+  templateDesignerState = {
+    form,
+    fields: templateFields(form).map(field => ({ ...field })),
+    selectedId: null,
+    addMode: false
+  };
+  $('#templateDesignerTitle').textContent = `${form.title} – Felder auf Linien setzen`;
+  $('#templateFieldInspector').classList.add('hidden');
+  $('#templateDesignerDialog').showModal();
+  $('#addTemplateField').onclick = () => {
+    templateDesignerState.addMode = !templateDesignerState.addMode;
+    updateAddFieldButton();
+  };
+  $('#designerFieldLabel').oninput = syncSelectedDesignerField;
+  $('#designerFieldType').onchange = syncSelectedDesignerField;
+  $('#designerFieldRequired').onchange = syncSelectedDesignerField;
+  $('#designerFieldFontSize').oninput = syncSelectedDesignerField;
+  $('#deleteTemplateField').onclick = () => {
+    const idToDelete = templateDesignerState.selectedId;
+    if (!idToDelete) return;
+    templateDesignerState.fields = templateDesignerState.fields.filter(field => field.id !== idToDelete);
+    templateDesignerState.selectedId = null;
+    $('#templateFieldInspector').classList.add('hidden');
+    renderDesignerFields();
+  };
+  $('#saveTemplateDesign').onclick = saveTemplateDesign;
+  try {
+    await renderTemplateBackground(form, $('#templateDesignerPages'), 'designer');
+    renderDesignerFields();
+    updateAddFieldButton();
+  } catch (error) {
+    $('#templateDesignerPages').innerHTML = `<div class="template-editor-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+async function saveTemplateDesign() {
+  const button = $('#saveTemplateDesign');
+  button.disabled = true; const old = button.textContent; button.textContent = 'Speichern …';
+  try {
+    const { error } = await sb.from('online_forms').update({ template_fields: templateDesignerState.fields }).eq('id', templateDesignerState.form.id);
+    if (error) throw error;
+    const target = forms.find(item => item.id === templateDesignerState.form.id);
+    if (target) target.template_fields = templateDesignerState.fields.map(field => ({ ...field }));
+    $('#templateDesignerDialog').close();
+    renderPage();
+    toast('Vorlagen-Editor wurde gespeichert.');
+  } catch (error) { toast(error.message); }
+  finally { button.disabled = false; button.textContent = old; }
+}
+
+function createTemplateInput(field, layer) {
+  const element = field.type === 'textarea' ? document.createElement('textarea') : document.createElement('input');
+  if (field.type !== 'textarea') element.type = ['date','number'].includes(field.type) ? field.type : 'text';
+  element.className = `template-field-input${field.type === 'textarea' ? ' template-textarea' : ''}`;
+  element.dataset.templateInput = field.id;
+  element.dataset.templateLabel = field.label || 'Feld';
+  element.required = Boolean(field.required);
+  element.placeholder = field.label || '';
+  element.title = field.label || '';
+  element.style.left = `${field.x * 100}%`;
+  element.style.top = `${field.y * 100}%`;
+  element.style.width = `${field.w * 100}%`;
+  element.style.height = `${field.h * 100}%`;
+  const setFont = () => { element.style.fontSize = `${Math.max(9, (field.fontSize || 16/820) * layer.clientWidth)}px`; };
+  setFont();
+  if (window.ResizeObserver) new ResizeObserver(setFont).observe(layer);
+  return element;
+}
+
+async function openVisualTemplateFill(form) {
+  templateFillState = { form };
+  $('#templateFillTitle').textContent = form.title;
+  $('#templateFillDescription').textContent = form.description || '';
+  $('#templateExtraQuestions').innerHTML = (form.questions || []).map((q, i) => `<label>${escapeHtml(q)}<textarea data-template-extra-answer="${i}" rows="2" required></textarea></label>`).join('');
+  $('#templateFillDialog').showModal();
+  $('#templateFillForm').onsubmit = submitVisualTemplateForm;
+  try {
+    await renderTemplateBackground(form, $('#templateFillPages'), 'fill');
+    for (const field of templateFields(form)) {
+      const layer = $(`#templateFillPages [data-template-layer="${field.page}"]`);
+      if (!layer) continue;
+      layer.appendChild(createTemplateInput(field, layer));
+    }
+  } catch (error) {
+    $('#templateFillPages').innerHTML = `<div class="template-editor-empty">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function splitPdfText(text, font, size, maxWidth) {
+  const source = String(text || '').replace(/\r/g, '').split('\n');
+  const out = [];
+  for (const paragraph of source) {
+    const words = paragraph.split(/\s+/).filter(Boolean);
+    if (!words.length) { out.push(''); continue; }
+    let line = '';
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (font.widthOfTextAtSize(candidate, size) <= maxWidth || !line) line = candidate;
+      else { out.push(line); line = word; }
+    }
+    if (line) out.push(line);
+  }
+  return out;
+}
+
+async function buildFilledTemplatePdf(form, values) {
+  if (!window.PDFLib) throw new Error('PDF-Erstellung konnte nicht geladen werden. Bitte die Seite neu laden.');
+  const url = await signedTemplateUrl(form, 900);
+  const response = await fetch(url);
+  if (!response.ok) throw new Error('Vorlage konnte nicht geladen werden.');
+  const bytes = await response.arrayBuffer();
+  const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+  const mime = String(form.file_mime || '').toLowerCase();
+  const name = String(form.file_name || '').toLowerCase();
+  const isPdf = mime === 'application/pdf' || name.endsWith('.pdf');
+  let pdfDoc;
+  if (isPdf) {
+    pdfDoc = await PDFDocument.load(bytes);
+  } else {
+    pdfDoc = await PDFDocument.create();
+    const embedded = (mime === 'image/png' || name.endsWith('.png')) ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+    const natural = embedded.scale(1);
+    const maxWidth = 1200;
+    const scale = natural.width > maxWidth ? maxWidth / natural.width : 1;
+    const page = pdfDoc.addPage([natural.width * scale, natural.height * scale]);
+    page.drawImage(embedded, { x: 0, y: 0, width: natural.width * scale, height: natural.height * scale });
+  }
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const pages = pdfDoc.getPages();
+  for (const field of templateFields(form)) {
+    const text = String(values[field.id] ?? '').trim();
+    if (!text) continue;
+    const page = pages[Math.max(0, Number(field.page || 1) - 1)];
+    if (!page) continue;
+    const { width, height } = page.getSize();
+    const fontSize = Math.max(7, Math.min(30, Number(field.fontSize || 16/820) * width));
+    const x = Number(field.x || 0) * width + 2;
+    const top = Number(field.y || 0) * height;
+    const boxW = Math.max(20, Number(field.w || .3) * width - 4);
+    const boxH = Math.max(fontSize + 2, Number(field.h || .04) * height);
+    const lines = splitPdfText(text, font, fontSize, boxW);
+    const lineHeight = fontSize * 1.12;
+    let y = height - top - fontSize - Math.max(1, (boxH - fontSize) * .25);
+    for (const line of lines) {
+      if (y < height - top - boxH) break;
+      page.drawText(line, { x, y, size: fontSize, font, color: rgb(0.04, 0.06, 0.1), maxWidth: boxW });
+      y -= lineHeight;
+    }
+  }
+  return pdfDoc.save();
+}
+
+async function uploadGeneratedPdf(bytes, form) {
+  const name = `${safeFileName(form.title || 'Formular')}-ausgefuellt.pdf`;
+  const path = `submissions/${currentProfile.id}/${form.id}/${Date.now()}-${name}`;
+  const blob = new Blob([bytes], { type: 'application/pdf' });
+  const { error } = await sb.storage.from('forms').upload(path, blob, { upsert: false, contentType: 'application/pdf' });
+  if (error) throw error;
+  return { path, name };
+}
+
+async function submitVisualTemplateForm(event) {
+  event.preventDefault();
+  const formEl = event.currentTarget;
+  setBusy(formEl, true);
+  const form = templateFillState.form;
+  try {
+    const values = {};
+    let firstInvalid = null;
+    for (const field of templateFields(form)) {
+      const input = $(`[data-template-input="${field.id}"]`);
+      if (!input) continue;
+      input.classList.remove('invalid');
+      const value = input.value.trim();
+      values[field.id] = value;
+      if (field.required && !value && !firstInvalid) { firstInvalid = input; input.classList.add('invalid'); }
+    }
+    if (firstInvalid) { firstInvalid.focus(); throw new Error('Bitte alle Pflichtfelder direkt in der Vorlage ausfüllen.'); }
+    const answers = templateFields(form).map(field => ({ question: field.label || 'Feld', answer: values[field.id] || '' }));
+    (form.questions || []).forEach((question, i) => {
+      const answer = $(`[data-template-extra-answer="${i}"]`)?.value.trim() || '';
+      answers.push({ question, answer });
+    });
+    const pdfBytes = await buildFilledTemplatePdf(form, values);
+    const uploaded = await uploadGeneratedPdf(pdfBytes, form);
+    const { error } = await sb.from('form_submissions').insert({
+      form_id: form.id,
+      user_id: currentProfile.id,
+      answers,
+      file_path: uploaded.path,
+      file_name: uploaded.name
+    });
+    if (error) throw error;
+    $('#templateFillDialog').close();
+    await reloadAndRender('Formular wurde direkt ausgefüllt und als PDF abgesendet.');
+  } catch (error) { toast(error.message); }
+  finally { setBusy(formEl, false); }
+}
+
+// V4 überschreibt die Formularübersicht: Direkt-Editor + direkte Eingabe auf den Linien.
+function renderForms(content) {
+  setTitle('FORMULARE','Formulare');
+  const visible = forms.filter(f => currentProfile.role === 'admin' || f.published);
+  content.innerHTML = `<div class="hero"><div><h3>Formulare & Vorlagen</h3><p>${currentProfile.role === 'admin' ? 'PDF/JPG/PNG hochladen und die Eingabefelder direkt auf die Linien setzen – wie in Canva.' : 'Direkt in die vorgesehenen Linien der Vorlage klicken, schreiben und als PDF absenden.'}</p></div>${currentProfile.role === 'admin' ? '<button id="newOnlineForm" class="btn primary">+ Formular hochladen / erstellen</button>' : ''}</div><div class="forms-grid">${visible.length ? visible.map(f => {
+    const subs = formSubmissions.filter(s => s.form_id === f.id);
+    const own = subs.find(s => s.user_id === currentProfile.id);
+    const hasFile = Boolean(f.file_path);
+    const qCount = Array.isArray(f.questions) ? f.questions.length : 0;
+    const editable = visualTemplateSupported(f);
+    const directFields = templateFields(f).length;
+    return `<div class="card form-card"><div class="form-card-head"><div><h3>${escapeHtml(f.title)}</h3><p>${escapeHtml(f.description || '')}</p></div><span class="badge ${f.published ? 'active' : 'inactive'}">${f.published ? 'Online' : 'Entwurf'}</span></div><p class="muted">${hasFile ? '📎 Eigene Vorlage · ' : ''}${directFields ? `<span class="form-editor-badge">✎ ${directFields} Felder direkt auf Linien</span> · ` : ''}${qCount} Zusatzfragen${currentProfile.role === 'admin' ? ` · ${subs.length} Antworten` : own ? ' · Bereits gesendet' : ''}</p><div class="row-actions">${hasFile ? `<button class="mini" data-open-form-file="${f.id}">Original öffnen</button>` : ''}${currentProfile.role === 'admin' && editable ? `<button class="btn primary" data-template-designer="${f.id}">${directFields ? 'Editor bearbeiten' : '✎ Linien-Editor einrichten'}</button>` : ''}<button class="btn primary" data-fill-form="${f.id}">${directFields ? 'Direkt in Vorlage ausfüllen' : hasFile ? 'Ausfüllen / zurücksenden' : 'Online ausfüllen'}</button>${currentProfile.role === 'admin' ? `<button class="mini" data-edit-form="${f.id}">Details</button><button class="mini" data-submissions="${f.id}">Antworten (${subs.length})</button><button class="mini bad" data-delete-form="${f.id}">Löschen</button>` : ''}</div></div>`;
+  }).join('') : '<div class="card empty">Keine Formulare vorhanden.</div>'}</div>`;
+  const newBtn = $('#newOnlineForm'); if (newBtn) newBtn.onclick = () => openOnlineFormDialog();
+  $$('[data-open-form-file]').forEach(btn => btn.onclick = () => openFormTemplateFile(btn.dataset.openFormFile));
+  $$('[data-template-designer]').forEach(btn => btn.onclick = () => openTemplateDesigner(btn.dataset.templateDesigner));
+  $$('[data-fill-form]').forEach(btn => btn.onclick = () => openFillForm(btn.dataset.fillForm));
+  $$('[data-edit-form]').forEach(btn => btn.onclick = () => openOnlineFormDialog(btn.dataset.editForm));
+  $$('[data-submissions]').forEach(btn => btn.onclick = () => showFormSubmissions(btn.dataset.submissions));
+  $$('[data-delete-form]').forEach(btn => btn.onclick = () => deleteOnlineForm(btn.dataset.deleteForm));
+}
+
+// V4: Wenn der Admin Felder auf der Vorlage gesetzt hat, öffnet sich der visuelle Editor.
+function openFillForm(id) {
+  const form = forms.find(item => item.id === id);
+  if (!form) return;
+  if (visualTemplateSupported(form) && templateFields(form).length) {
+    openVisualTemplateFill(form);
+    return;
+  }
+  $('#fillFormId').value = form.id;
+  $('#fillFormTitle').textContent = form.title;
+  $('#fillFormDescription').textContent = form.description || '';
+  $('#fillFormFile').value = '';
+  const template = $('#fillFormTemplate');
+  template.classList.toggle('hidden', !form.file_path);
+  template.innerHTML = form.file_path ? `<div><b>Vorlage:</b> ${escapeHtml(form.file_name || 'Formular')}</div><button id="openTemplateFromFill" type="button" class="btn ghost">Vorlage öffnen</button>${visualTemplateSupported(form) ? '<p class="field-hint">Der Admin hat für diese Vorlage noch keine direkten Textfelder auf den Linien eingerichtet.</p>' : ''}` : '';
+  if (form.file_path) $('#openTemplateFromFill').onclick = () => openStorageFile(form.file_path);
+  $('#fillFormFileWrap').classList.toggle('hidden', !form.file_path);
+  $('#fillFormQuestions').innerHTML = (form.questions || []).map((q, i) => `<label>${escapeHtml(q)}<textarea data-form-answer="${i}" rows="2" required></textarea></label>`).join('');
+  $('#fillFormDialog').showModal();
+}
+
+// V4: Beim Ersetzen der Vorlage werden alte Feldpositionen bewusst zurückgesetzt.
+async function saveOnlineForm(event) {
+  event.preventDefault();
+  setBusy(event.currentTarget, true);
+  const id = $('#formId').value || crypto.randomUUID();
+  const questions = $('#formQuestions').value.split('\n').map(x => x.trim()).filter(Boolean);
+  const existing = forms.find(x => x.id === id);
+  const file = $('#formFile').files?.[0] || null;
+  let filePath = existing?.file_path || null, fileName = existing?.file_name || null, fileMime = existing?.file_mime || null;
+  try {
+    if (file) {
+      if (file.size > 10 * 1024 * 1024) throw new Error('Die Datei darf höchstens 10 MB groß sein.');
+      filePath = await uploadTemplateFile(file, id); fileName = file.name; fileMime = file.type || '';
+    }
+    const payload = {
+      id,
+      title: $('#formTitle').value.trim(),
+      description: $('#formDescription').value.trim(),
+      questions,
+      published: $('#formPublished').checked,
+      created_by: currentProfile.id,
+      file_path: filePath,
+      file_name: fileName,
+      file_mime: fileMime,
+      ...(file ? { template_fields: [] } : {})
+    };
+    if (!payload.title) throw new Error('Bitte einen Titel eintragen.');
+    if (!filePath && questions.length === 0) throw new Error('Bitte eine Datei hochladen oder mindestens eine Online-Frage eintragen.');
+    const result = existing ? await sb.from('online_forms').update(payload).eq('id', id) : await sb.from('online_forms').insert(payload);
+    if (result.error) throw result.error;
+    $('#formDialog').close();
+    await reloadAndRender(file && existing && templateFields(existing).length ? 'Neue Vorlage gespeichert. Die alten Feldpositionen wurden zurückgesetzt.' : 'Formular wurde gespeichert.');
+  } catch (error) { toast(error.message); }
+  finally { setBusy(event.currentTarget, false); }
+}
+
 init().catch((error) => {
   console.error(error);
   toast(`Fehler: ${error.message}`);
