@@ -1145,7 +1145,16 @@ async function syncPushSubscription(force = false) {
     user_agent: navigator.userAgent,
     updated_at: new Date().toISOString()
   };
-  const { error } = await sb.from('push_subscriptions').upsert(payload, { onConflict: 'endpoint' });
+  // Nicht direkt in die RLS-geschützte Tabelle schreiben. Ein Push-Endpunkt
+  // gehört pro Browser/Service-Worker nur einmal und kann noch einem zuvor
+  // angemeldeten Konto zugeordnet sein. Die RPC übernimmt den Endpunkt sicher
+  // für das aktuell angemeldete Konto (auth.uid()).
+  const { error } = await sb.rpc('save_push_subscription', {
+    p_endpoint: payload.endpoint,
+    p_p256dh: payload.p256dh,
+    p_auth: payload.auth,
+    p_user_agent: payload.user_agent
+  });
   if (error) throw error;
 }
 
@@ -1386,7 +1395,15 @@ function visualTemplateSupported(form) {
 }
 
 function templateFields(form) {
-  return Array.isArray(form?.template_fields) ? form.template_fields : [];
+  const raw = form?.template_fields;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (_) { return []; }
+  }
+  return [];
 }
 
 async function signedTemplateUrl(form, expires = 900) {
@@ -1624,14 +1641,26 @@ async function saveTemplateDesign() {
   const button = $('#saveTemplateDesign');
   button.disabled = true; const old = button.textContent; button.textContent = 'Speichern …';
   try {
-    const { error } = await sb.from('online_forms').update({ template_fields: templateDesignerState.fields }).eq('id', templateDesignerState.form.id);
-    if (error) throw error;
-    const target = forms.find(item => item.id === templateDesignerState.form.id);
-    if (target) target.template_fields = templateDesignerState.fields.map(field => ({ ...field }));
+    const fields = templateDesignerState.fields.map(field => ({ ...field }));
+    const { error: rpcError } = await sb.rpc('save_form_template_fields', {
+      p_form_id: templateDesignerState.form.id,
+      p_fields: fields
+    });
+    if (rpcError) throw rpcError;
+
+    // Direkt frisch aus der Datenbank lesen. So sieht der Admin sofort,
+    // dass die Felder wirklich gespeichert wurden – und Kunden bekommen
+    // auf anderen Geräten ebenfalls die aktuelle Version.
+    const { data: fresh, error: freshError } = await sb.from('online_forms').select('*').eq('id', templateDesignerState.form.id).single();
+    if (freshError) throw freshError;
+    const index = forms.findIndex(item => item.id === fresh.id);
+    if (index >= 0) forms[index] = fresh; else forms.unshift(fresh);
+    templateDesignerState.form = fresh;
+
     $('#templateDesignerDialog').close();
     renderPage();
-    toast('Vorlagen-Editor wurde gespeichert.');
-  } catch (error) { toast(error.message); }
+    toast(`${templateFields(fresh).length} Feld${templateFields(fresh).length === 1 ? '' : 'er'} auf der Vorlage gespeichert.`);
+  } catch (error) { toast(`Editor konnte nicht gespeichert werden: ${error.message}`); }
   finally { button.disabled = false; button.textContent = old; }
 }
 
@@ -1807,11 +1836,21 @@ function renderForms(content) {
 }
 
 // V4: Wenn der Admin Felder auf der Vorlage gesetzt hat, öffnet sich der visuelle Editor.
-function openFillForm(id) {
-  const form = forms.find(item => item.id === id);
+async function openFillForm(id) {
+  let form = forms.find(item => item.id === id);
   if (!form) return;
+  // Vor dem Öffnen einmal frisch laden, damit neu gesetzte Linienfelder nicht
+  // durch einen alten Browser-/Realtime-Stand verloren wirken.
+  try {
+    const { data: fresh, error } = await sb.from('online_forms').select('*').eq('id', id).single();
+    if (!error && fresh) {
+      form = fresh;
+      const index = forms.findIndex(item => item.id === id);
+      if (index >= 0) forms[index] = fresh;
+    }
+  } catch (_) {}
   if (visualTemplateSupported(form) && templateFields(form).length) {
-    openVisualTemplateFill(form);
+    await openVisualTemplateFill(form);
     return;
   }
   $('#fillFormId').value = form.id;
