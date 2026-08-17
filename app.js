@@ -27,6 +27,9 @@ let activeChatThreadId = null;
 let realtimeChannel = null;
 let backgroundTimer = null;
 let realtimeDebounce = null;
+let chatReloadTimer = null;
+let lastChatError = '';
+let swRegistration = null;
 
 const today = new Date();
 const iso = (date) => {
@@ -77,6 +80,21 @@ function isInternalEmail(value = '') {
 }
 function visibleEmail(value = '') {
   return !value || isInternalEmail(value) ? 'Nicht angegeben' : value;
+}
+function profileContactEmail(item = {}) {
+  const value = String(item.contact_email || '').trim();
+  if (value) return value;
+  return !item.email || isInternalEmail(item.email) ? '' : item.email;
+}
+function profileLoginName(item = {}) {
+  return item.username || (isInternalEmail(item.email) ? String(item.email).split('@')[0] : '');
+}
+function profileDisplayEmail(item = {}) {
+  return profileContactEmail(item) || 'Nicht angegeben';
+}
+function desiredPageFromLocation() {
+  const value = String(location.hash || '').replace(/^#/, '');
+  return ['dashboard','calendar','requests','chats','forms','notifications','users','services','customers','profile','request'].includes(value) ? value : 'dashboard';
 }
 
 function toast(message) {
@@ -152,6 +170,8 @@ async function init() {
 
   if (!configReady) return;
 
+  await registerServiceWorker();
+
   sb = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY, {
     auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
   });
@@ -198,14 +218,24 @@ function bindStaticEvents() {
 async function loginWithPassword(event) {
   event.preventDefault();
   if (!configReady) return toast('Supabase ist noch nicht verbunden.');
+  const identifier = $('#loginEmail').value.trim();
   setBusy(event.currentTarget, true);
-  const { error } = await sb.auth.signInWithPassword({
-    email: loginIdentifierToEmail($('#loginEmail').value),
-    password: $('#loginPassword').value
-  });
-  setBusy(event.currentTarget, false);
-  if (error) return toast(`Anmeldung fehlgeschlagen: ${error.message}`);
-  toast('Erfolgreich angemeldet.');
+  try {
+    const { error } = await withTimeout(sb.auth.signInWithPassword({
+      email: loginIdentifierToEmail(identifier),
+      password: $('#loginPassword').value
+    }), 15000);
+    if (error) throw error;
+    toast('Erfolgreich angemeldet.');
+  } catch (error) {
+    const hint = identifier.includes('@')
+      ? 'E-Mail oder Passwort stimmt nicht.'
+      : 'Benutzername oder Passwort stimmt nicht. Wenn dieses Konto vom Admin erstellt wurde, kann der Admin unter „Konten verwalten“ → „Zugänge reparieren“ alte Konten bestätigen.';
+    toast(`Anmeldung fehlgeschlagen. ${hint}`);
+    console.warn(error);
+  } finally {
+    setBusy(event.currentTarget, false);
+  }
 }
 
 async function registerWithPassword(event) {
@@ -268,15 +298,15 @@ async function openApp() {
   }
 
   await loadData();
-  $('#userName').textContent = currentProfile.full_name || currentProfile.email;
+  $('#userName').textContent = currentProfile.full_name || profileDisplayEmail(currentProfile);
   $('#userRole').textContent = roleName(currentProfile.role);
-  $('#userAvatar').textContent = (currentProfile.full_name || currentProfile.email || 'A')[0].toUpperCase();
-  currentPage = 'dashboard';
+  $('#userAvatar').textContent = (currentProfile.full_name || profileDisplayEmail(currentProfile) || 'A')[0].toUpperCase();
+  currentPage = desiredPageFromLocation();
   renderNav();
   renderPage();
   startRealtimeSync();
   startBackgroundTasks();
-  checkAppointmentReminders();
+  await syncPushSubscriptionIfGranted();
 }
 
 async function loadProfileWithRetry() {
@@ -292,19 +322,18 @@ async function loadProfileWithRetry() {
 }
 
 async function loadData() {
-  const queries = [
+  const coreQueries = [
     sb.from('profiles').select('*').order('full_name'),
     sb.from('services').select('*').order('name'),
     sb.from('appointments').select('*').order('appointment_date').order('appointment_time'),
-    sb.from('chat_threads').select('*').order('updated_at', { ascending: false }),
-    sb.from('chat_messages').select('*').order('created_at'),
     sb.from('online_forms').select('*').order('created_at', { ascending: false }),
     sb.from('form_submissions').select('*').order('submitted_at', { ascending: false }),
-    sb.from('app_notifications').select('*').order('created_at', { ascending: false }).limit(100)
+    sb.from('app_notifications').select('*').order('created_at', { ascending: false }).limit(100),
+    sb.from('chat_threads').select('*').order('updated_at', { ascending: false })
   ];
-  const [profileResult, serviceResult, appointmentResult, threadResult, messageResult, formResult, submissionResult, notificationResult] = await Promise.all(queries);
+  const [profileResult, serviceResult, appointmentResult, formResult, submissionResult, notificationResult, threadResult] = await Promise.all(coreQueries);
 
-  [profileResult, serviceResult, appointmentResult, threadResult, messageResult, formResult, submissionResult, notificationResult]
+  [profileResult, serviceResult, appointmentResult, formResult, submissionResult, notificationResult, threadResult]
     .filter((result) => result.error)
     .forEach((result) => console.warn(result.error.message));
 
@@ -312,11 +341,55 @@ async function loadData() {
   if (!profiles.some((item) => item.id === currentProfile.id)) profiles.push(currentProfile);
   services = serviceResult.data || [];
   appointments = appointmentResult.data || [];
-  chatThreads = threadResult.data || [];
-  chatMessages = messageResult.data || [];
   forms = formResult.data || [];
   formSubmissions = submissionResult.data || [];
   notifications = notificationResult.data || [];
+  chatThreads = threadResult.data || [];
+  lastChatError = threadResult.error?.message || '';
+
+  if (chatThreads.length) {
+    const ids = chatThreads.map((thread) => thread.id);
+    const messageResult = await sb.from('chat_messages').select('*').in('thread_id', ids).order('created_at');
+    if (messageResult.error) {
+      lastChatError = messageResult.error.message;
+      console.warn(messageResult.error.message);
+      chatMessages = [];
+    } else {
+      chatMessages = messageResult.data || [];
+    }
+  } else {
+    chatMessages = [];
+  }
+}
+
+async function reloadChatData() {
+  if (!sb || !currentProfile) return;
+  const threadResult = await sb.from('chat_threads').select('*').order('updated_at', { ascending: false });
+  if (threadResult.error) {
+    lastChatError = threadResult.error.message;
+    if (currentPage === 'chats') renderPage();
+    return;
+  }
+  chatThreads = threadResult.data || [];
+  if (!chatThreads.some((thread) => thread.id === activeChatThreadId)) activeChatThreadId = chatThreads[0]?.id || null;
+  if (!chatThreads.length) {
+    chatMessages = [];
+    lastChatError = '';
+    if (currentPage === 'chats') renderPage();
+    return;
+  }
+  const messageResult = await sb.from('chat_messages').select('*').in('thread_id', chatThreads.map((t) => t.id)).order('created_at');
+  if (messageResult.error) lastChatError = messageResult.error.message;
+  else { chatMessages = messageResult.data || []; lastChatError = ''; }
+  if (currentPage === 'chats') {
+    renderPage();
+    requestAnimationFrame(() => { const box = $('#chatMessages'); if (box) box.scrollTop = box.scrollHeight; });
+  }
+}
+
+function scheduleChatReload() {
+  clearTimeout(chatReloadTimer);
+  chatReloadTimer = setTimeout(reloadChatData, 160);
 }
 
 function closeApp() {
@@ -499,7 +572,7 @@ function personSearchBlock(placeholder = 'Nach Name oder E-Mail suchen') {
 function personCard(item, adminMode = false) {
   return `<button class="person-result" type="button" data-view-person="${item.id}">
     <span class="person-avatar">${escapeHtml((item.full_name || item.email || '?')[0].toUpperCase())}</span>
-    <span class="person-main"><b>${escapeHtml(item.full_name || 'Ohne Name')}</b><small>${escapeHtml(visibleEmail(item.email))}</small></span>
+    <span class="person-main"><b>${escapeHtml(item.full_name || 'Ohne Name')}</b><small>${escapeHtml(profileDisplayEmail(item))}</small></span>
     <span class="badge ${item.role}">${roleName(item.role)}</span>
     <span class="badge ${item.active ? 'active' : 'inactive'}">${item.active ? 'Aktiv' : 'Gesperrt'}</span>
     ${adminMode ? '<span class="person-arrow">›</span>' : ''}
@@ -511,7 +584,7 @@ function bindPersonSearch(source, targetId, adminMode = false) {
   const target = $(`#${targetId}`);
   const draw = () => {
     const query = input.value.trim().toLowerCase();
-    const result = source.filter((item) => `${item.full_name || ''} ${item.email || ''}`.toLowerCase().includes(query));
+    const result = source.filter((item) => `${item.full_name || ''} ${profileContactEmail(item)} ${profileLoginName(item)}`.toLowerCase().includes(query));
     target.innerHTML = result.length ? result.map((item) => personCard(item, adminMode)).join('') : '<div class="empty">Keine Person gefunden.</div>';
     $$('[data-view-person]').forEach((button) => button.onclick = () => openPersonProfile(button.dataset.viewPerson));
   };
@@ -526,7 +599,7 @@ function openPersonProfile(id) {
     .filter((appointment) => appointment.customer_id === id || appointment.employee_id === id)
     .sort((a, b) => `${a.appointment_date}${a.appointment_time}`.localeCompare(`${b.appointment_date}${b.appointment_time}`));
   $('#personDialogTitle').textContent = item.full_name || item.email;
-  $('#personDialogContent').innerHTML = `<div class="profile-summary"><div class="person-avatar large">${escapeHtml((item.full_name || item.email)[0].toUpperCase())}</div><div><h4>${escapeHtml(item.full_name || 'Ohne Name')}</h4><p>${escapeHtml(visibleEmail(item.email))}</p></div></div>
+  $('#personDialogContent').innerHTML = `<div class="profile-summary"><div class="person-avatar large">${escapeHtml((item.full_name || item.email)[0].toUpperCase())}</div><div><h4>${escapeHtml(item.full_name || 'Ohne Name')}</h4><p>${escapeHtml(profileDisplayEmail(item))}${profileLoginName(item) ? ` · Benutzername: ${escapeHtml(profileLoginName(item))}` : ''}</p></div></div>
     <div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(item.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Rolle</span><b>${roleName(item.role)}</b></div><div class="info-row"><span>Status</span><b>${item.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${item.created_at ? new Intl.DateTimeFormat('de-DE').format(new Date(item.created_at)) : '–'}</b></div></div>
     <div class="profile-appointments"><h4>Termine (${personAppointments.length})</h4>${personAppointments.length ? personAppointments.slice(0, 8).map((appointment) => `<div class="profile-appointment"><b>${formatDate(appointment.appointment_date)} · ${appointment.appointment_time.slice(0,5)}</b><span>${escapeHtml(serviceById(appointment.service_id).name)} · ${statusName(appointment.status)}</span></div>`).join('') : '<p class="muted">Keine Termine vorhanden.</p>'}</div>
     ${(['admin','employee'].includes(currentProfile.role) && item.role === 'customer') ? `<div class="actions person-admin-actions"><button id="chatPersonFromProfile" class="btn primary" type="button">Mit Kunde schreiben</button>${currentProfile.role==='admin'?'<button id="remindPersonFromProfile" class="btn ghost" type="button">Erinnerung senden</button>':''}</div>` : ''}
@@ -546,10 +619,27 @@ function openPersonProfile(id) {
 function renderUsers(content) {
   setTitle('VERWALTUNG', 'Konten verwalten');
   const list = [...profiles].sort((a, b) => (a.full_name || '').localeCompare(b.full_name || ''));
-  content.innerHTML = `<div class="hero"><div><h3>Alle Konten</h3><p>Suche nach Name oder E-Mail und öffne das vollständige Profil.</p></div><button id="newUser" class="btn primary">+ Konto erstellen</button></div>
-    <div class="card">${personSearchBlock()}<div id="peopleResults" class="people-results"></div></div>`;
+  content.innerHTML = `<div class="hero"><div><h3>Alle Konten</h3><p>Suche nach Name, E-Mail oder Benutzername. Vom Admin erstellte Konten brauchen keine E-Mail zum Anmelden.</p></div><div class="hero-actions"><button id="repairAccounts" class="btn ghost">Zugänge reparieren</button><button id="newUser" class="btn primary">+ Konto erstellen</button></div></div>
+    <div class="card">${personSearchBlock('Nach Name, E-Mail oder Benutzername suchen')}<div id="peopleResults" class="people-results"></div></div>`;
   $('#newUser').onclick = () => openUserDialog();
+  $('#repairAccounts').onclick = repairAdminManagedAccounts;
   bindPersonSearch(list, 'peopleResults', true);
+}
+
+async function repairAdminManagedAccounts() {
+  const button = $('#repairAccounts');
+  if (button) { button.disabled = true; button.textContent = 'Wird repariert …'; }
+  try {
+    const data = await invokeAdminUsers({ action: 'repair' });
+    await loadData();
+    renderPage();
+    toast(`${data.repaired || 0} vom Admin erstellte Zugänge wurden geprüft/repariert.`);
+  } catch (error) {
+    toast(`Reparatur nicht möglich: ${error.message}. Prüfe, ob die Edge Function „admin-users“ eingerichtet ist.`);
+  } finally {
+    const next = $('#repairAccounts');
+    if (next) { next.disabled = false; next.textContent = 'Zugänge reparieren'; }
+  }
 }
 
 function renderCustomers(content) {
@@ -569,7 +659,7 @@ function renderServices(content) {
 
 function renderProfile(content) {
   setTitle('KONTO', 'Mein Profil');
-  content.innerHTML = `<div class="two-col"><div class="card profile-card"><div class="user-big">${escapeHtml((currentProfile.full_name || currentProfile.email)[0].toUpperCase())}</div><h3>${escapeHtml(currentProfile.full_name)}</h3><p class="muted">${escapeHtml(visibleEmail(currentProfile.email))}</p><span class="badge ${currentProfile.role}">${roleName(currentProfile.role)}</span><div style="margin-top:18px"><button id="editOwnProfile" class="btn primary">Daten bearbeiten</button></div></div><div class="card"><h3>Kontoinformationen</h3><div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(currentProfile.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Status</span><b>${currentProfile.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${new Intl.DateTimeFormat('de-DE').format(new Date(currentProfile.created_at))}</b></div></div></div></div>`;
+  content.innerHTML = `<div class="two-col"><div class="card profile-card"><div class="user-big">${escapeHtml((currentProfile.full_name || profileDisplayEmail(currentProfile))[0].toUpperCase())}</div><h3>${escapeHtml(currentProfile.full_name)}</h3><p class="muted">${escapeHtml(profileDisplayEmail(currentProfile))}${profileLoginName(currentProfile) ? ` · ${escapeHtml(profileLoginName(currentProfile))}` : ''}</p><span class="badge ${currentProfile.role}">${roleName(currentProfile.role)}</span><div style="margin-top:18px"><button id="editOwnProfile" class="btn primary">Daten bearbeiten</button></div></div><div class="card"><h3>Kontoinformationen</h3><div class="info-list"><div class="info-row"><span>Telefon</span><b>${escapeHtml(currentProfile.phone || 'Nicht angegeben')}</b></div><div class="info-row"><span>Status</span><b>${currentProfile.active ? 'Aktiv' : 'Gesperrt'}</b></div><div class="info-row"><span>Erstellt</span><b>${new Intl.DateTimeFormat('de-DE').format(new Date(currentProfile.created_at))}</b></div></div></div></div>`;
   $('#editOwnProfile').onclick = () => {
     $('#profileName').value = currentProfile.full_name || '';
     $('#profilePhone').value = currentProfile.phone || '';
@@ -646,7 +736,6 @@ async function saveAppointment(event) {
     appointments.sort((a, b) => `${a.appointment_date}${a.appointment_time}`.localeCompare(`${b.appointment_date}${b.appointment_time}`));
     $('#appointmentDialog').close();
     renderPage();
-    checkAppointmentReminders();
     toast(currentProfile.role === 'customer' ? 'Anfrage wurde gesendet.' : 'Termin wurde gespeichert.');
   } catch (error) { toast(error.message || 'Termin konnte nicht gespeichert werden.'); }
   finally { setBusy(form, false); }
@@ -677,13 +766,13 @@ function openUserDialog(id = null) {
   $('#userDialogTitle').textContent = item ? 'Konto bearbeiten' : 'Konto erstellen';
   $('#editUserId').value = item?.id || '';
   $('#newUserName').value = item?.full_name || '';
-  $('#newUsername').value = item && isInternalEmail(item.email) ? item.email.split('@')[0] : '';
+  $('#newUsername').value = item ? profileLoginName(item) : '';
   $('#newUsername').required = !item;
   $('#newUsername').disabled = Boolean(item);
   $('#usernameLabel').classList.toggle('hidden', Boolean(item));
   $('#usernameHint').classList.toggle('hidden', Boolean(item));
   $('#newUserPhone').value = item?.phone || '';
-  $('#newUserEmail').value = item ? (isInternalEmail(item.email) ? '' : item.email || '') : '';
+  $('#newUserEmail').value = item ? profileContactEmail(item) : '';
   $('#newUserPassword').value = '';
   $('#newUserPassword').required = !item;
   $('#passwordLabel').firstChild.textContent = item ? 'Neues Passwort (optional)' : 'Startpasswort';
@@ -695,7 +784,16 @@ function openUserDialog(id = null) {
 
 async function invokeAdminUsers(body) {
   const { data, error } = await sb.functions.invoke('admin-users', { body });
-  if (error) throw new Error(error.message);
+  if (error) {
+    let message = error.message || 'Edge Function konnte nicht aufgerufen werden.';
+    try {
+      if (error.context?.json) {
+        const detail = await error.context.json();
+        if (detail?.error) message = detail.error;
+      }
+    } catch (_) {}
+    throw new Error(message);
+  }
   if (!data?.ok) throw new Error(data?.error || 'Unbekannter Fehler');
   return data;
 }
@@ -703,46 +801,37 @@ async function invokeAdminUsers(body) {
 async function createAdminManagedAccount(body) {
   const username = normalizeUsername(body.username);
   if (username.length < 3) throw new Error('Der Benutzername muss mindestens 3 Zeichen lang sein.');
-  const authEmail = internalEmailForUsername(username);
-  const isolated = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY, {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
-  });
-  const { data, error } = await withTimeout(isolated.auth.signUp({
-    email: authEmail,
-    password: body.password,
-    options: { data: { full_name: body.full_name, phone: body.phone, username, admin_created: true } }
-  }), 15000);
-  if (error) throw error;
-  if (!data?.user || data.user.identities?.length === 0) {
-    throw new Error('Dieser Benutzername ist bereits vergeben.');
+  if (!body.password || body.password.length < 8) throw new Error('Das Startpasswort muss mindestens 8 Zeichen lang sein.');
+  try {
+    await invokeAdminUsers({ ...body, action: 'create', username });
+  } catch (error) {
+    // Fallback, falls die Edge Function noch nicht eingerichtet ist. Das klappt nur, wenn Confirm email in Supabase ausgeschaltet ist.
+    if (!String(error.message || '').toLowerCase().includes('function') && !String(error.message || '').includes('404')) throw error;
+    const authEmail = internalEmailForUsername(username);
+    const isolated = window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_PUBLISHABLE_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+    const { data, error: signupError } = await withTimeout(isolated.auth.signUp({
+      email: authEmail,
+      password: body.password,
+      options: { data: { full_name: body.full_name, phone: body.phone, username, admin_created: true } }
+    }), 15000);
+    if (signupError) throw signupError;
+    if (!data?.user || !data.session) throw new Error('Das Konto wurde angelegt, aber noch nicht bestätigt. Richte die Edge Function „admin-users“ ein und klicke danach auf „Zugänge reparieren“.');
+    const { error: profileError } = await sb.rpc('admin_configure_account_v2', {
+      p_user_id: data.user.id, p_full_name: body.full_name, p_phone: body.phone || '', p_contact_email: body.email || '', p_username: username, p_role: body.role, p_active: true
+    });
+    if (profileError) throw profileError;
   }
-  const { error: profileError } = await sb.rpc('admin_configure_account', {
-    p_user_id: data.user.id,
-    p_full_name: body.full_name,
-    p_phone: body.phone || '',
-    p_contact_email: body.email || '',
-    p_role: body.role,
-    p_active: true
-  });
-  if (profileError) throw new Error(`${profileError.message} – führe zuerst die Datei supabase-update.sql im SQL Editor aus.`);
 }
 
 async function updateAdminManagedAccount(body) {
-  const { error } = await sb.rpc('admin_configure_account', {
-    p_user_id: body.id,
-    p_full_name: body.full_name,
-    p_phone: body.phone || '',
-    p_contact_email: body.email || '',
-    p_role: body.role,
-    p_active: body.active
-  });
-  if (error) throw new Error(`${error.message} – führe zuerst die Datei supabase-update.sql im SQL Editor aus.`);
-  if (body.password) {
-    try {
-      await invokeAdminUsers({ action: 'update', id: body.id, password: body.password });
-    } catch (_) {
-      toast('Profildaten gespeichert. Das Passwort konnte ohne die optionale Admin-Funktion nicht geändert werden.');
-    }
+  try {
+    await invokeAdminUsers({ ...body, action: 'update' });
+  } catch (error) {
+    const { error: profileError } = await sb.rpc('admin_configure_account_v2', {
+      p_user_id: body.id, p_full_name: body.full_name, p_phone: body.phone || '', p_contact_email: body.email || '', p_username: profileLoginName(profiles.find((p) => p.id === body.id) || {}), p_role: body.role, p_active: body.active
+    });
+    if (profileError) throw error;
+    if (body.password) toast('Profildaten gespeichert. Für ein neues Passwort muss die Edge Function „admin-users“ eingerichtet sein.');
   }
 }
 
@@ -776,15 +865,16 @@ async function saveAdminUser(event) {
 async function deleteAdminUser(id) {
   const item = profiles.find((profile) => profile.id === id);
   if (!confirm(`Konto von ${item?.full_name || 'diesem Benutzer'} sperren? Die Person kann sich danach nicht mehr anmelden.`)) return;
-  const { error } = await sb.rpc('admin_configure_account', {
+  const { error } = await sb.rpc('admin_configure_account_v2', {
     p_user_id: id,
     p_full_name: item?.full_name || '',
     p_phone: item?.phone || '',
-    p_contact_email: isInternalEmail(item?.email) ? '' : item?.email || '',
+    p_contact_email: profileContactEmail(item || {}),
+    p_username: profileLoginName(item || {}),
     p_role: item?.role || 'customer',
     p_active: false
   });
-  if (error) return toast(`${error.message} – führe zuerst supabase-update.sql aus.`);
+  if (error) return toast(`${error.message} – führe zuerst das neue Supabase-Update aus.`);
   await reloadAndRender('Konto wurde gesperrt.');
 }
 
@@ -898,59 +988,59 @@ function startRealtimeSync() {
   realtimeChannel = sb.channel(`termin-live-${session.user.id}`)
     .on('postgres_changes',{event:'*',schema:'public',table:'appointments'},scheduleRealtimeReload)
     .on('postgres_changes',{event:'*',schema:'public',table:'services'},scheduleRealtimeReload)
-    .on('postgres_changes',{event:'*',schema:'public',table:'chat_messages'},scheduleRealtimeReload)
-    .on('postgres_changes',{event:'*',schema:'public',table:'chat_threads'},scheduleRealtimeReload)
+    .on('postgres_changes',{event:'*',schema:'public',table:'chat_messages'},handleChatRealtime)
+    .on('postgres_changes',{event:'*',schema:'public',table:'chat_threads'},scheduleChatReload)
     .on('postgres_changes',{event:'*',schema:'public',table:'online_forms'},scheduleRealtimeReload)
     .on('postgres_changes',{event:'*',schema:'public',table:'form_submissions'},scheduleRealtimeReload)
     .on('postgres_changes',{event:'*',schema:'public',table:'app_notifications'},handleNotificationRealtime)
-    .subscribe();
+    .subscribe((status, error) => { if (error) console.warn('Realtime:', error); });
 }
 
+function handleChatRealtime(payload) {
+  const item = payload?.new;
+  if (payload?.eventType === 'INSERT' && item?.id && !chatMessages.some((m) => m.id === item.id)) {
+    chatMessages.push(item);
+    chatMessages.sort((a,b)=>String(a.created_at).localeCompare(String(b.created_at)));
+    if (currentPage === 'chats') {
+      renderPage();
+      requestAnimationFrame(()=>{const box=$('#chatMessages');if(box)box.scrollTop=box.scrollHeight;});
+    }
+  }
+  scheduleChatReload();
+}
 
 function handleNotificationRealtime(payload) {
   const item=payload?.new;
   if(payload?.eventType==='INSERT' && item?.user_id===currentProfile?.id) {
+    if (!notifications.some((n)=>n.id===item.id)) notifications.unshift(item);
     toast(`${item.title}: ${item.body}`);
-    if ('Notification' in window && Notification.permission==='granted') {
-      new Notification(item.title,{body:item.body});
+    if ('Notification' in window && Notification.permission==='granted' && document.visibilityState === 'visible') {
+      new Notification(item.title,{body:item.body, icon:'icon-192.png'});
     }
+    if (currentPage === 'notifications') renderPage();
   }
-  scheduleRealtimeReload();
 }
 
 function scheduleRealtimeReload() {
   clearTimeout(realtimeDebounce);
-  realtimeDebounce=setTimeout(async()=>{ if (!currentProfile) return; await loadData(); renderPage(); checkAppointmentReminders(); },450);
+  realtimeDebounce=setTimeout(async()=>{ if (!currentProfile) return; await loadData(); renderPage(); },350);
 }
 
 function startBackgroundTasks() {
   if (backgroundTimer) clearInterval(backgroundTimer);
   backgroundTimer=setInterval(async()=>{
     if (!currentProfile) return;
-    await loadData();
-    if (currentPage==='calendar' || currentPage==='chats' || currentPage==='notifications') renderPage();
-    checkAppointmentReminders();
+    if (currentPage === 'chats') await reloadChatData();
+    else {
+      await loadData();
+      if (currentPage==='calendar' || currentPage==='notifications') renderPage();
+    }
   },60000);
 }
 
 async function checkAppointmentReminders() {
-  if (!currentProfile || !sb) return;
-  const now=Date.now();
-  const relevant=appointments.filter((a)=>a.status==='confirmed' && (a.customer_id===currentProfile.id || a.employee_id===currentProfile.id));
-  for (const item of relevant) {
-    const diff=(localDateTime(item).getTime()-now)/60000;
-    const mins=Number(item.reminder_minutes || 30);
-    if (diff>mins || diff<0) continue;
-    const dedupe=`appointment:${item.id}:soon`;
-    if (notifications.some((n)=>n.dedupe_key===dedupe)) continue;
-    const title='Termin steht bald an';
-    const body=`${formatDate(item.appointment_date)} um ${item.appointment_time.slice(0,5)} · ${serviceById(item.service_id).name}`;
-    const {data,error}=await sb.from('app_notifications').insert({user_id:currentProfile.id,appointment_id:item.id,type:'appointment_reminder',title,body,dedupe_key:dedupe}).select('*').single();
-    if (!error && data) {
-      notifications.unshift(data); toast(body);
-      if ('Notification' in window && Notification.permission==='granted') new Notification(title,{body});
-    }
-  }
+  // Erinnerungen werden jetzt serverseitig per Supabase Cron erzeugt. Dadurch funktionieren sie auch, wenn die Website geschlossen ist.
+  return;
 }
 
 function openReminderDialog(appointmentId) {
@@ -991,10 +1081,78 @@ async function sendManualReminder(event) {
 function renderNotifications(content) {
   setTitle('ERINNERUNGEN','Benachrichtigungen');
   const unread=notifications.filter(n=>!n.read).length;
-  content.innerHTML=`<div class="hero"><div><h3>Erinnerungen</h3><p>Automatische und manuell verschickte Erinnerungen erscheinen hier sofort.</p></div><div class="hero-actions"><button id="enableNotifications" class="btn primary">Browser-Erinnerungen aktivieren</button>${unread?`<button id="markNotifications" class="btn ghost">Alle als gelesen</button>`:''}</div></div><div class="card notification-list">${notifications.length?notifications.map(n=>`<button class="notification-item ${n.read?'':'unread'}" data-read-notification="${n.id}"><div><b>${escapeHtml(n.title)}</b><p>${escapeHtml(n.body)}</p></div><small>${new Intl.DateTimeFormat('de-DE',{dateStyle:'short',timeStyle:'short'}).format(new Date(n.created_at))}</small></button>`).join(''):'<div class="empty">Noch keine Erinnerungen.</div>'}</div>`;
-  $('#enableNotifications').onclick=async()=>{ if (!('Notification' in window)) return toast('Dieser Browser unterstützt keine Benachrichtigungen.'); const perm=await Notification.requestPermission(); toast(perm==='granted'?'Browser-Erinnerungen sind aktiv.':'Benachrichtigungen wurden nicht erlaubt.'); };
+  const pushSupported = 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const pushLabel = ('Notification' in window && Notification.permission === 'granted') ? 'Handy-Benachrichtigungen aktiv' : 'Handy-Benachrichtigungen aktivieren';
+  content.innerHTML=`<div class="hero"><div><h3>Erinnerungen</h3><p>Terminerinnerungen und Nachrichten können als echte Push-Benachrichtigung auf dem Handy erscheinen – auch wenn die Website geschlossen ist.</p></div><div class="hero-actions"><button id="enableNotifications" class="btn primary" ${pushSupported?'':'disabled'}>${pushLabel}</button>${unread?`<button id="markNotifications" class="btn ghost">Alle als gelesen</button>`:''}</div></div>
+    <div class="note push-note"><b>Am Handy:</b> Android: Benachrichtigungen erlauben. iPhone/iPad: die Website zuerst über „Teilen → Zum Home-Bildschirm“ installieren und danach hier Push aktivieren.</div>
+    <div class="card notification-list">${notifications.length?notifications.map(n=>`<button class="notification-item ${n.read?'':'unread'}" data-read-notification="${n.id}"><div><b>${escapeHtml(n.title)}</b><p>${escapeHtml(n.body)}</p></div><small>${new Intl.DateTimeFormat('de-DE',{dateStyle:'short',timeStyle:'short'}).format(new Date(n.created_at))}</small></button>`).join(''):'<div class="empty">Noch keine Erinnerungen.</div>'}</div>`;
+  const enable = $('#enableNotifications');
+  enable.onclick = enablePhonePush;
   const mark=$('#markNotifications'); if(mark) mark.onclick=async()=>{await sb.from('app_notifications').update({read:true}).eq('user_id',currentProfile.id); notifications=notifications.map(n=>({...n,read:true}));renderNotifications(content);};
   $$('[data-read-notification]').forEach(btn=>btn.onclick=async()=>{await sb.from('app_notifications').update({read:true}).eq('id',btn.dataset.readNotification);const n=notifications.find(x=>x.id===btn.dataset.readNotification);if(n)n.read=true;renderNotifications(content);});
+}
+
+async function registerServiceWorker() {
+  if (!('serviceWorker' in navigator)) return null;
+  try {
+    swRegistration = await navigator.serviceWorker.register('./sw.js?v=21', { scope: './' });
+    return swRegistration;
+  } catch (error) {
+    console.warn('Service Worker konnte nicht registriert werden:', error);
+    return null;
+  }
+}
+
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = atob(base64);
+  return Uint8Array.from([...rawData].map((char) => char.charCodeAt(0)));
+}
+
+async function enablePhonePush() {
+  if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) return toast('Push-Benachrichtigungen werden auf diesem Browser nicht unterstützt.');
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const standalone = window.matchMedia?.('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (ios && !standalone) return toast('Auf iPhone/iPad: zuerst Teilen → Zum Home-Bildschirm. Öffne danach die installierte App und aktiviere hier die Benachrichtigungen.');
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') return toast('Benachrichtigungen wurden nicht erlaubt.');
+    await syncPushSubscription(true);
+    toast('Handy-Benachrichtigungen sind jetzt aktiv.');
+    if (currentPage === 'notifications') renderPage();
+  } catch (error) {
+    console.warn(error);
+    toast(`Push konnte nicht aktiviert werden: ${error.message}`);
+  }
+}
+
+async function syncPushSubscription(force = false) {
+  if (!currentProfile || !cfg.VAPID_PUBLIC_KEY || !('Notification' in window) || Notification.permission !== 'granted') return;
+  const reg = swRegistration || await registerServiceWorker();
+  if (!reg) return;
+  let subscription = await reg.pushManager.getSubscription();
+  if (!subscription && force) {
+    subscription = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(cfg.VAPID_PUBLIC_KEY) });
+  }
+  if (!subscription) return;
+  const json = subscription.toJSON();
+  const payload = {
+    user_id: currentProfile.id,
+    endpoint: subscription.endpoint,
+    p256dh: json.keys?.p256dh || '',
+    auth: json.keys?.auth || '',
+    user_agent: navigator.userAgent,
+    updated_at: new Date().toISOString()
+  };
+  const { error } = await sb.from('push_subscriptions').upsert(payload, { onConflict: 'endpoint' });
+  if (error) throw error;
+}
+
+async function syncPushSubscriptionIfGranted() {
+  if ('Notification' in window && Notification.permission === 'granted') {
+    try { await syncPushSubscription(false); } catch (error) { console.warn('Push-Sync:', error); }
+  }
 }
 
 function threadPeople(thread) {
@@ -1019,10 +1177,14 @@ function renderChats(content) {
   setTitle('NACHRICHTEN',currentProfile.role==='admin'?'Alle Chats':'Chats');
   if (!activeChatThreadId && chatThreads[0]) activeChatThreadId=chatThreads[0].id;
   const active=chatThreads.find(t=>t.id===activeChatThreadId);
-  content.innerHTML=`<div class="chat-layout"><aside class="chat-list"><div class="chat-list-head"><div><h3>${currentProfile.role==='admin'?'Alle Unterhaltungen':'Nachrichten'}</h3><small>${chatThreads.length} Chats</small></div><button id="newChatBtn" class="mini">+ Kunde anschreiben</button></div><div class="chat-thread-list">${chatThreads.length?chatThreads.map(t=>{const ppl=threadPeople(t);const msgs=chatMessages.filter(m=>m.thread_id===t.id);const last=msgs.at(-1);return `<button class="chat-thread ${t.id===activeChatThreadId?'active':''}" data-thread="${t.id}"><b>${escapeHtml(ppl.customer.full_name)} ↔ ${escapeHtml(ppl.employee.full_name)}</b><small>${escapeHtml(last?.body||'Noch keine Nachricht')}</small></button>`}).join(''):'<div class="empty">Noch keine Chats.</div>'}</div></aside><section class="chat-window">${active?chatWindowHtml(active):'<div class="empty">Wähle einen Chat aus oder schreibe einen Kunden an.</div>'}</section></div>`;
-  $$('[data-thread]').forEach(btn=>btn.onclick=()=>{activeChatThreadId=btn.dataset.thread;renderChats(content);});
+  const errorBox = lastChatError ? `<div class="note"><b>Chat konnte nicht vollständig geladen werden:</b> ${escapeHtml(lastChatError)} <button id="reloadChats" class="mini" type="button">Neu laden</button></div>` : '';
+  const newLabel = currentProfile.role === 'customer' ? '+ Mitarbeiter anschreiben' : '+ Kunde anschreiben';
+  content.innerHTML=`${errorBox}<div class="chat-layout"><aside class="chat-list"><div class="chat-list-head"><div><h3>${currentProfile.role==='admin'?'Alle Unterhaltungen':'Nachrichten'}</h3><small>${chatThreads.length} Chats</small></div><button id="newChatBtn" class="mini">${newLabel}</button></div><div class="chat-thread-list">${chatThreads.length?chatThreads.map(t=>{const ppl=threadPeople(t);const msgs=chatMessages.filter(m=>m.thread_id===t.id);const last=msgs.at(-1);return `<button class="chat-thread ${t.id===activeChatThreadId?'active':''}" data-thread="${t.id}"><b>${escapeHtml(ppl.customer.full_name)} ↔ ${escapeHtml(ppl.employee.full_name)}</b><small>${escapeHtml(last?.body||'Noch keine Nachricht')}</small></button>`}).join(''):'<div class="empty">Noch keine Chats.</div>'}</div></aside><section class="chat-window">${active?chatWindowHtml(active):'<div class="empty">Wähle einen Chat aus oder starte eine neue Unterhaltung.</div>'}</section></div>`;
+  $$('[data-thread]').forEach(btn=>btn.onclick=()=>{activeChatThreadId=btn.dataset.thread;renderChats(content);requestAnimationFrame(()=>{const box=$('#chatMessages');if(box)box.scrollTop=box.scrollHeight;});});
   $('#newChatBtn').onclick=()=>openDirectChatPicker();
+  const reload=$('#reloadChats'); if(reload) reload.onclick=reloadChatData;
   const form=$('#chatSendForm'); if(form) form.onsubmit=sendChatMessage;
+  requestAnimationFrame(()=>{const box=$('#chatMessages');if(box)box.scrollTop=box.scrollHeight;});
 }
 
 async function startDirectCustomerChat(customerId) {
@@ -1051,7 +1213,7 @@ function openDirectChatPicker() {
   const customers=profiles.filter(p=>p.role==='customer'&&p.active);
   const name=prompt(`Kundenname oder E-Mail:\n${customers.slice(0,20).map(p=>p.full_name).join(', ')}`)||'';
   const query=name.trim().toLowerCase();
-  const person=customers.find(p=>`${p.full_name||''} ${p.email||''}`.toLowerCase().includes(query));
+  const person=customers.find(p=>`${p.full_name||''} ${profileContactEmail(p)} ${profileLoginName(p)}`.toLowerCase().includes(query));
   if(!person) return toast('Kunde nicht gefunden.');
   startDirectCustomerChat(person.id);
 }
