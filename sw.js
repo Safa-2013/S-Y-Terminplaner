@@ -1,5 +1,5 @@
-const CACHE_NAME = 'sy-terminplaner-v3-21';
-const CORE = ['./','index.html','styles.css','app.js','config.js','manifest.webmanifest','icon-192.png','icon-512.png','logo-safa-yildiz-icon.png'];
+const CACHE_NAME = 'sy-terminplaner-v5-50';
+const CORE = ['./','index.html','styles.css','app.js','config.js','manifest.webmanifest','icon-192.png','icon-512.png','logo-safa-yildiz-icon.png','einfacher-vertrag.pdf','kaufvertrag.pdf','dienstleistungsvereinbarung.pdf','uebergabe-zahlungsbestaetigung.pdf','vertragsfragebogen.pdf'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(CORE)).catch(() => null));

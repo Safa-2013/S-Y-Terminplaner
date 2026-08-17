@@ -1902,6 +1902,239 @@ async function saveOnlineForm(event) {
   finally { setBusy(event.currentTarget, false); }
 }
 
+
+// ===== V5: automatische KI-Felder + feste Safa-Yildiz-Standardvorlagen =====
+const V5_TEMPLATE_PRESETS = {"einfacher-vertrag.pdf":[{"label":"Partei B - Name / Firma","type":"text","required":true,"x":0.25198,"y":0.32783,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract1-01","page":1},{"label":"Partei B - Adresse","type":"text","required":true,"x":0.25198,"y":0.35872,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract1-02","page":1},{"label":"Partei B - Telefon / E-Mail","type":"text","required":false,"x":0.25198,"y":0.38841,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract1-03","page":1},{"label":"Vertragsgegenstand / Vereinbarung","type":"textarea","required":true,"x":0.10415,"y":0.45849,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract1-04","page":1},{"label":"Preis / Zahlung","type":"textarea","required":false,"x":0.10415,"y":0.56064,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract1-05","page":1},{"label":"Besondere Absprachen","type":"textarea","required":false,"x":0.10415,"y":0.66279,"w":0.79123,"h":0.04989,"fontSize":0.014634,"id":"contract1-06","page":1},{"label":"Betrag","type":"number","required":false,"x":0.22847,"y":0.721,"w":0.24694,"h":0.02138,"fontSize":0.014634,"id":"contract1-07","page":1},{"label":"Fällig am","type":"date","required":false,"x":0.6518,"y":0.721,"w":0.26206,"h":0.02138,"fontSize":0.014634,"id":"contract1-08","page":1},{"label":"Ort, Datum","type":"text","required":false,"x":0.19991,"y":0.75544,"w":0.29062,"h":0.02138,"fontSize":0.014634,"id":"contract1-09","page":1},{"label":"Unterschrift Safa Yildiz","type":"text","required":false,"x":0.08567,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract1-10","page":1},{"label":"Unterschrift Partei B","type":"text","required":false,"x":0.54765,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract1-11","page":1}],"kaufvertrag.pdf":[{"label":"Partei B - Name / Firma","type":"text","required":true,"x":0.25198,"y":0.32783,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract2-01","page":1},{"label":"Partei B - Adresse","type":"text","required":true,"x":0.25198,"y":0.35872,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract2-02","page":1},{"label":"Partei B - Telefon / E-Mail","type":"text","required":false,"x":0.25198,"y":0.38841,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract2-03","page":1},{"label":"Verkaufter Gegenstand","type":"textarea","required":true,"x":0.10415,"y":0.45849,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract2-04","page":1},{"label":"Zustand / Zubehör","type":"textarea","required":false,"x":0.10415,"y":0.56064,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract2-05","page":1},{"label":"Besondere Absprachen","type":"textarea","required":false,"x":0.10415,"y":0.66279,"w":0.79123,"h":0.04989,"fontSize":0.014634,"id":"contract2-06","page":1},{"label":"Betrag","type":"number","required":false,"x":0.22847,"y":0.721,"w":0.24694,"h":0.02138,"fontSize":0.014634,"id":"contract2-07","page":1},{"label":"Fällig am","type":"date","required":false,"x":0.6518,"y":0.721,"w":0.26206,"h":0.02138,"fontSize":0.014634,"id":"contract2-08","page":1},{"label":"Ort, Datum","type":"text","required":false,"x":0.19991,"y":0.75544,"w":0.29062,"h":0.02138,"fontSize":0.014634,"id":"contract2-09","page":1},{"label":"Unterschrift Safa Yildiz","type":"text","required":false,"x":0.08567,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract2-10","page":1},{"label":"Unterschrift Partei B","type":"text","required":false,"x":0.54765,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract2-11","page":1}],"dienstleistungsvereinbarung.pdf":[{"label":"Partei B - Name / Firma","type":"text","required":true,"x":0.25198,"y":0.32783,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract3-01","page":1},{"label":"Partei B - Adresse","type":"text","required":true,"x":0.25198,"y":0.35872,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract3-02","page":1},{"label":"Partei B - Telefon / E-Mail","type":"text","required":false,"x":0.25198,"y":0.38841,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract3-03","page":1},{"label":"Auftrag / Leistung","type":"textarea","required":true,"x":0.10415,"y":0.45849,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract3-04","page":1},{"label":"Termin / Zeitraum","type":"textarea","required":false,"x":0.10415,"y":0.56064,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract3-05","page":1},{"label":"Preis / Zahlungsweise","type":"textarea","required":false,"x":0.10415,"y":0.66279,"w":0.79123,"h":0.04989,"fontSize":0.014634,"id":"contract3-06","page":1},{"label":"Betrag","type":"number","required":false,"x":0.22847,"y":0.721,"w":0.24694,"h":0.02138,"fontSize":0.014634,"id":"contract3-07","page":1},{"label":"Fällig am","type":"date","required":false,"x":0.6518,"y":0.721,"w":0.26206,"h":0.02138,"fontSize":0.014634,"id":"contract3-08","page":1},{"label":"Ort, Datum","type":"text","required":false,"x":0.19991,"y":0.75544,"w":0.29062,"h":0.02138,"fontSize":0.014634,"id":"contract3-09","page":1},{"label":"Unterschrift Safa Yildiz","type":"text","required":false,"x":0.08567,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract3-10","page":1},{"label":"Unterschrift Partei B","type":"text","required":false,"x":0.54765,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract3-11","page":1}],"uebergabe-zahlungsbestaetigung.pdf":[{"label":"Partei B - Name / Firma","type":"text","required":true,"x":0.25198,"y":0.32783,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract4-01","page":1},{"label":"Partei B - Adresse","type":"text","required":true,"x":0.25198,"y":0.35872,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract4-02","page":1},{"label":"Partei B - Telefon / E-Mail","type":"text","required":false,"x":0.25198,"y":0.38841,"w":0.66188,"h":0.02138,"fontSize":0.015854,"id":"contract4-03","page":1},{"label":"Übergebener Gegenstand / Dokumente","type":"textarea","required":true,"x":0.10415,"y":0.45849,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract4-04","page":1},{"label":"Erhaltener Betrag / Zahlungsart","type":"textarea","required":false,"x":0.10415,"y":0.56064,"w":0.79123,"h":0.05345,"fontSize":0.014634,"id":"contract4-05","page":1},{"label":"Bemerkungen","type":"textarea","required":false,"x":0.10415,"y":0.66279,"w":0.79123,"h":0.04989,"fontSize":0.014634,"id":"contract4-06","page":1},{"label":"Betrag","type":"number","required":false,"x":0.22847,"y":0.721,"w":0.24694,"h":0.02138,"fontSize":0.014634,"id":"contract4-07","page":1},{"label":"Fällig am","type":"date","required":false,"x":0.6518,"y":0.721,"w":0.26206,"h":0.02138,"fontSize":0.014634,"id":"contract4-08","page":1},{"label":"Ort, Datum","type":"text","required":false,"x":0.19991,"y":0.75544,"w":0.29062,"h":0.02138,"fontSize":0.014634,"id":"contract4-09","page":1},{"label":"Unterschrift Safa Yildiz","type":"text","required":false,"x":0.08567,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract4-10","page":1},{"label":"Unterschrift Partei B","type":"text","required":false,"x":0.54765,"y":0.81008,"w":0.36622,"h":0.02138,"fontSize":0.013415,"id":"contract4-11","page":1}],"vertragsfragebogen.pdf":[{"label":"Formular-Nr.","type":"text","required":false,"x":0.87522,"y":0.02494,"w":0.0672,"h":0.01782,"fontSize":0.014634,"id":"questionnaire-01","page":1},{"label":"Datum","type":"date","required":false,"x":0.84163,"y":0.04157,"w":0.10079,"h":0.01782,"fontSize":0.014634,"id":"questionnaire-02","page":1},{"label":"Kundendaten - Name / Firma","type":"text","required":true,"x":0.18983,"y":0.14254,"w":0.36286,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-03","page":1},{"label":"Kundendaten - Telefon","type":"text","required":false,"x":0.65684,"y":0.14254,"w":0.28558,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-04","page":1},{"label":"Kundendaten - Adresse","type":"text","required":true,"x":0.15287,"y":0.1651,"w":0.39981,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-05","page":1},{"label":"Kundendaten - E-Mail","type":"text","required":false,"x":0.65684,"y":0.1651,"w":0.28558,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-06","page":1},{"label":"Einfacher Vertrag","type":"checkbox","required":false,"x":0.05712,"y":0.22782,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-07","page":1},{"label":"Kaufvertrag","type":"checkbox","required":false,"x":0.26206,"y":0.22782,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-08","page":1},{"label":"Dienstleistungsvereinbarung","type":"checkbox","required":false,"x":0.42837,"y":0.22782,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-09","page":1},{"label":"Übergabe-/Zahlungsbestätigung","type":"checkbox","required":false,"x":0.71899,"y":0.22782,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-10","page":1},{"label":"Sonstiger Vertrag","type":"checkbox","required":false,"x":0.05712,"y":0.24968,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-11","page":1},{"label":"Sonstiger Vertrag - Bezeichnung","type":"text","required":false,"x":0.23854,"y":0.23994,"w":0.70388,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-12","page":1},{"label":"Ziel / Anlass","type":"textarea","required":true,"x":0.17639,"y":0.29339,"w":0.76603,"h":0.04276,"fontSize":0.014634,"id":"questionnaire-13","page":1},{"label":"Partei A - Name / Firma","type":"text","required":true,"x":0.17639,"y":0.38604,"w":0.30742,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-14","page":1},{"label":"Partei A - Adresse","type":"text","required":false,"x":0.13775,"y":0.40504,"w":0.34606,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-15","page":1},{"label":"Partei A - Telefon / E-Mail","type":"text","required":false,"x":0.20495,"y":0.42405,"w":0.27886,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-16","page":1},{"label":"Partei B - Name / Firma","type":"text","required":true,"x":0.635,"y":0.38604,"w":0.30742,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-17","page":1},{"label":"Partei B - Adresse","type":"text","required":false,"x":0.59804,"y":0.40504,"w":0.34438,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-18","page":1},{"label":"Partei B - Telefon / E-Mail","type":"text","required":false,"x":0.66356,"y":0.42405,"w":0.27886,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-19","page":1},{"label":"Gegenstand / Leistung / Vereinbarung","type":"text","required":true,"x":0.36118,"y":0.47275,"w":0.58124,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-20","page":1},{"label":"Zustand / Zubehör / Umfang","type":"text","required":false,"x":0.36118,"y":0.49294,"w":0.58124,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-21","page":1},{"label":"Termin / Zeitraum / Übergabe","type":"text","required":false,"x":0.36118,"y":0.51313,"w":0.58124,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-22","page":1},{"label":"Preis / Betrag","type":"number","required":false,"x":0.19487,"y":0.53332,"w":0.22007,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-23","page":1},{"label":"Zahlungsweise","type":"text","required":false,"x":0.59468,"y":0.53332,"w":0.18143,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-24","page":1},{"label":"Fällig am","type":"date","required":false,"x":0.87522,"y":0.53332,"w":0.0672,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-25","page":1},{"label":"Besondere Absprachen / Bedingungen","type":"textarea","required":false,"x":0.36622,"y":0.55352,"w":0.5762,"h":0.03801,"fontSize":0.014634,"id":"questionnaire-26","page":1},{"label":"Benötigte Unterlagen / Nachweise","type":"textarea","required":false,"x":0.33766,"y":0.59271,"w":0.60476,"h":0.03801,"fontSize":0.014634,"id":"questionnaire-27","page":1},{"label":"Firmenstempel","type":"checkbox","required":false,"x":0.05712,"y":0.6723,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-28","page":1},{"label":"Zeugen","type":"checkbox","required":false,"x":0.23854,"y":0.6723,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-29","page":1},{"label":"Anlage / Fotos","type":"checkbox","required":false,"x":0.3763,"y":0.6723,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-30","page":1},{"label":"Rechnung / Quittung","type":"checkbox","required":false,"x":0.57116,"y":0.6723,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-31","page":1},{"label":"Eilige Bearbeitung","type":"checkbox","required":false,"x":0.79963,"y":0.6723,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-32","page":1},{"label":"Weitere Wünsche","type":"checkbox","required":false,"x":0.05712,"y":0.69368,"w":0.0168,"h":0.01188,"fontSize":0.014634,"id":"questionnaire-33","page":1},{"label":"Weitere Wünsche - Text","type":"text","required":false,"x":0.21839,"y":0.68418,"w":0.72403,"h":0.02613,"fontSize":0.014634,"id":"questionnaire-34","page":1},{"label":"Ort, Datum","type":"text","required":true,"x":0.17135,"y":0.76257,"w":0.2671,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-35","page":1},{"label":"Unterschrift Kunde","type":"text","required":true,"x":0.6854,"y":0.76257,"w":0.25702,"h":0.02138,"fontSize":0.014634,"id":"questionnaire-36","page":1}]};
+
+function hasTemplateFileV5(form) {
+  return Boolean(form?.file_path || form?.asset_path);
+}
+
+function visualTemplateSupported(form) {
+  const mime = String(form?.file_mime || '').toLowerCase();
+  const name = String(form?.file_name || form?.asset_path || '').toLowerCase();
+  return mime === 'application/pdf' || mime === 'image/png' || mime === 'image/jpeg' || /\.(pdf|png|jpe?g)$/.test(name);
+}
+
+async function signedTemplateUrl(form, expires = 900) {
+  if (form?.asset_path) return new URL(String(form.asset_path), document.baseURI).href;
+  if (!form?.file_path) throw new Error('Für dieses Formular wurde keine Vorlage hinterlegt.');
+  const { data, error } = await sb.storage.from('forms').createSignedUrl(form.file_path, expires);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+function v5PresetFields(form) {
+  const preset = V5_TEMPLATE_PRESETS[String(form?.asset_path || '')];
+  if (!preset) return [];
+  return preset.map((field, index) => ({ ...field, id: crypto.randomUUID?.() || `auto-${Date.now()}-${index}` }));
+}
+
+function v5GuessFieldType(label) {
+  const s = String(label || '').toLowerCase();
+  if (/datum|fällig/.test(s)) return 'date';
+  if (/preis|betrag|summe|kosten/.test(s)) return 'number';
+  if (/bemerk|absprach|anlass|gegenstand|leistung|zustand|umfang|unterlagen|nachweise|wünsche|vereinbarung/.test(s)) return 'textarea';
+  return 'text';
+}
+
+async function v5GenericPdfFieldDetection(form) {
+  const url = await signedTemplateUrl(form);
+  setupPdfJsWorker();
+  const pdf = await window.pdfjsLib.getDocument({ url }).promise;
+  const fields = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const items = content.items.filter(item => String(item.str || '').trim());
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const text = String(item.str || '').trim();
+      if (!text.endsWith(':')) continue;
+      const tx = window.pdfjsLib.Util.transform(viewport.transform, item.transform);
+      const fontH = Math.max(8, Math.hypot(tx[2], tx[3]));
+      const left = tx[4] + Number(item.width || 0) + 5;
+      const top = tx[5] - fontH - 2;
+      if (left > viewport.width * .89 || top < 0) continue;
+      const label = text.replace(/:$/, '').trim() || 'Feld';
+      const type = v5GuessFieldType(label);
+      const width = Math.max(55, viewport.width * .92 - left);
+      const height = type === 'textarea' ? Math.max(30, fontH * 2.8) : Math.max(17, fontH * 1.5);
+      fields.push({
+        id: crypto.randomUUID(), page: pageNumber, label, type, required: false,
+        x: Math.max(0, left / viewport.width), y: Math.max(0, top / viewport.height),
+        w: Math.min(.8, width / viewport.width), h: Math.min(.12, height / viewport.height),
+        fontSize: Math.max(10, Math.min(16, fontH)) / 820
+      });
+    }
+  }
+  // Fast gleiche Treffer zusammenfassen.
+  return fields.filter((field, index, all) => !all.slice(0,index).some(old => old.page===field.page && Math.abs(old.x-field.x)<.02 && Math.abs(old.y-field.y)<.012));
+}
+
+async function v5AiDetectFields(form) {
+  const exact = v5PresetFields(form);
+  if (exact.length) return exact;
+  const name = String(form?.file_name || '').toLowerCase();
+  const mime = String(form?.file_mime || '').toLowerCase();
+  if (mime === 'application/pdf' || name.endsWith('.pdf')) return v5GenericPdfFieldDetection(form);
+  throw new Error('Die automatische Erkennung funktioniert derzeit für PDF-Vorlagen. Bei Bildern kannst du Felder weiterhin manuell setzen.');
+}
+
+async function openTemplateDesigner(id) {
+  const form = forms.find(item => item.id === id);
+  if (!form || !hasTemplateFileV5(form)) return toast('Bitte zuerst eine PDF-, JPG- oder PNG-Vorlage hinterlegen.');
+  if (!visualTemplateSupported(form)) return toast('Der Direkt-Editor unterstützt PDF, JPG und PNG.');
+  templateDesignerState = { form, fields: templateFields(form).map(field => ({ ...field })), selectedId: null, addMode: false };
+  $('#templateDesignerTitle').textContent = `${form.title} – KI-Linien-Editor`;
+  $('#templateFieldInspector').classList.add('hidden');
+  $('#templateDesignerDialog').showModal();
+  $('#addTemplateField').onclick = () => { templateDesignerState.addMode = !templateDesignerState.addMode; updateAddFieldButton(); };
+  $('#aiDetectTemplateFields').onclick = async () => {
+    const button = $('#aiDetectTemplateFields'); const old = button.textContent; button.disabled = true; button.textContent = '✨ KI analysiert …';
+    try {
+      if (templateDesignerState.fields.length && !confirm('Vorhandene Felder durch die automatische Erkennung ersetzen?')) return;
+      const detected = await v5AiDetectFields(form);
+      templateDesignerState.fields = detected;
+      templateDesignerState.selectedId = null;
+      $('#templateFieldInspector').classList.add('hidden');
+      renderDesignerFields();
+      toast(`${detected.length} Eingabefelder automatisch erkannt.`);
+    } catch (error) { toast(`Automatische Erkennung: ${error.message}`); }
+    finally { button.disabled = false; button.textContent = old; }
+  };
+  $('#designerFieldLabel').oninput = syncSelectedDesignerField;
+  $('#designerFieldType').onchange = syncSelectedDesignerField;
+  $('#designerFieldRequired').onchange = syncSelectedDesignerField;
+  $('#designerFieldFontSize').oninput = syncSelectedDesignerField;
+  $('#deleteTemplateField').onclick = () => {
+    const idToDelete = templateDesignerState.selectedId; if (!idToDelete) return;
+    templateDesignerState.fields = templateDesignerState.fields.filter(field => field.id !== idToDelete);
+    templateDesignerState.selectedId = null; $('#templateFieldInspector').classList.add('hidden'); renderDesignerFields();
+  };
+  $('#saveTemplateDesign').onclick = saveTemplateDesign;
+  try {
+    await renderTemplateBackground(form, $('#templateDesignerPages'), 'designer');
+    // Bei neuen PDFs startet die Erkennung automatisch. Die fünf Standardvorlagen
+    // kommen bereits vollständig erkannt aus der Datenbank.
+    if (!templateDesignerState.fields.length) {
+      try { templateDesignerState.fields = await v5AiDetectFields(form); } catch (_) {}
+    }
+    renderDesignerFields(); updateAddFieldButton();
+  } catch (error) { $('#templateDesignerPages').innerHTML = `<div class="template-editor-empty">${escapeHtml(error.message)}</div>`; }
+}
+
+function createTemplateInput(field, layer) {
+  if (field.type === 'checkbox') {
+    const element = document.createElement('input');
+    element.type = 'checkbox';
+    element.className = 'template-field-checkbox';
+    element.dataset.templateInput = field.id;
+    element.dataset.templateLabel = field.label || 'Auswahl';
+    element.required = Boolean(field.required);
+    element.title = field.label || '';
+    element.style.left = `${field.x * 100}%`; element.style.top = `${field.y * 100}%`;
+    element.style.width = `${field.w * 100}%`; element.style.height = `${field.h * 100}%`;
+    return element;
+  }
+  const element = field.type === 'textarea' ? document.createElement('textarea') : document.createElement('input');
+  if (field.type !== 'textarea') element.type = ['date','number'].includes(field.type) ? field.type : 'text';
+  element.className = `template-field-input${field.type === 'textarea' ? ' template-textarea' : ''}`;
+  element.dataset.templateInput = field.id; element.dataset.templateLabel = field.label || 'Feld';
+  element.required = Boolean(field.required); element.placeholder = field.label || ''; element.title = field.label || '';
+  element.style.left = `${field.x * 100}%`; element.style.top = `${field.y * 100}%`; element.style.width = `${field.w * 100}%`; element.style.height = `${field.h * 100}%`;
+  const setFont = () => { element.style.fontSize = `${Math.max(9, (field.fontSize || 16/820) * layer.clientWidth)}px`; };
+  setFont(); if (window.ResizeObserver) new ResizeObserver(setFont).observe(layer); return element;
+}
+
+async function buildFilledTemplatePdf(form, values) {
+  if (!window.PDFLib) throw new Error('PDF-Erstellung konnte nicht geladen werden. Bitte die Seite neu laden.');
+  const url = await signedTemplateUrl(form, 900); const response = await fetch(url); if (!response.ok) throw new Error('Vorlage konnte nicht geladen werden.');
+  const bytes = await response.arrayBuffer(); const { PDFDocument, StandardFonts, rgb } = window.PDFLib;
+  const mime = String(form.file_mime || '').toLowerCase(); const name = String(form.file_name || form.asset_path || '').toLowerCase(); const isPdf = mime === 'application/pdf' || name.endsWith('.pdf');
+  let pdfDoc;
+  if (isPdf) pdfDoc = await PDFDocument.load(bytes);
+  else {
+    pdfDoc = await PDFDocument.create(); const embedded = (mime === 'image/png' || name.endsWith('.png')) ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
+    const natural = embedded.scale(1); const maxWidth = 1200; const scale = natural.width > maxWidth ? maxWidth / natural.width : 1;
+    const page = pdfDoc.addPage([natural.width * scale, natural.height * scale]); page.drawImage(embedded, { x:0,y:0,width:natural.width*scale,height:natural.height*scale });
+  }
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica); const pages = pdfDoc.getPages();
+  for (const field of templateFields(form)) {
+    const page = pages[Math.max(0, Number(field.page || 1) - 1)]; if (!page) continue;
+    const { width, height } = page.getSize(); const x0 = Number(field.x || 0) * width; const top = Number(field.y || 0) * height;
+    if (field.type === 'checkbox') {
+      if (!values[field.id]) continue;
+      const size = Math.max(7, Math.min(14, Number(field.h || .02) * height * .95));
+      page.drawText('X', { x:x0+1, y:height-top-size+1, size, font, color:rgb(0.02,0.03,0.08) }); continue;
+    }
+    const text = String(values[field.id] ?? '').trim(); if (!text) continue;
+    const fontSize = Math.max(7, Math.min(30, Number(field.fontSize || 16/820) * width)); const x = x0 + 2;
+    const boxW = Math.max(20, Number(field.w || .3) * width - 4); const boxH = Math.max(fontSize + 2, Number(field.h || .04) * height);
+    const lines = splitPdfText(text, font, fontSize, boxW); const lineHeight = fontSize * 1.12; let y = height - top - fontSize - Math.max(1, (boxH - fontSize) * .25);
+    for (const line of lines) { if (y < height - top - boxH) break; page.drawText(line, { x,y,size:fontSize,font,color:rgb(0.04,0.06,0.1),maxWidth:boxW }); y -= lineHeight; }
+  }
+  return pdfDoc.save();
+}
+
+async function submitVisualTemplateForm(event) {
+  event.preventDefault(); const formEl = event.currentTarget; setBusy(formEl, true); const form = templateFillState.form;
+  try {
+    const values = {}; let firstInvalid = null;
+    for (const field of templateFields(form)) {
+      const input = $(`[data-template-input="${field.id}"]`); if (!input) continue; input.classList.remove('invalid');
+      const value = field.type === 'checkbox' ? Boolean(input.checked) : input.value.trim(); values[field.id] = value;
+      if (field.required && (field.type === 'checkbox' ? !input.checked : !value) && !firstInvalid) { firstInvalid=input; input.classList.add('invalid'); }
+    }
+    if (firstInvalid) { firstInvalid.focus(); throw new Error('Bitte alle Pflichtfelder direkt in der Vorlage ausfüllen.'); }
+    const answers = templateFields(form).map(field => ({ question: field.label || 'Feld', answer: field.type === 'checkbox' ? (values[field.id] ? 'Ja' : 'Nein') : (values[field.id] || '') }));
+    (form.questions || []).forEach((question,i) => { const answer=$(`[data-template-extra-answer="${i}"]`)?.value.trim() || ''; answers.push({question,answer}); });
+    const pdfBytes = await buildFilledTemplatePdf(form, values); const uploaded = await uploadGeneratedPdf(pdfBytes, form);
+    const { error } = await sb.from('form_submissions').insert({ form_id:form.id,user_id:currentProfile.id,answers,file_path:uploaded.path,file_name:uploaded.name }); if (error) throw error;
+    $('#templateFillDialog').close(); await reloadAndRender('Formular wurde direkt ausgefüllt und als PDF abgesendet.');
+  } catch (error) { toast(error.message); } finally { setBusy(formEl,false); }
+}
+
+async function openFormTemplateFile(id) {
+  const form = forms.find(x => x.id === id); if (!form || !hasTemplateFileV5(form)) return toast('Keine Datei vorhanden.');
+  if (form.asset_path) { const popup=window.open(new URL(form.asset_path, document.baseURI).href,'_blank'); if (popup) popup.opener=null; return; }
+  await openStorageFile(form.file_path);
+}
+
+function renderForms(content) {
+  setTitle('FORMULARE','Formulare'); const visible=forms.filter(f=>currentProfile.role==='admin'||f.published);
+  content.innerHTML=`<div class="hero"><div><h3>Formulare & Vorlagen</h3><p>${currentProfile.role==='admin'?'Die Safa-Yildiz-Standardformulare sind schon automatisch erkannt. Neue PDFs kann die KI ebenfalls automatisch vorbereiten.':'Direkt in die vorgesehenen Linien klicken, schreiben und als PDF absenden.'}</p></div>${currentProfile.role==='admin'?'<button id="newOnlineForm" class="btn primary">+ Eigenes Formular hochladen</button>':''}</div><div class="forms-grid">${visible.length?visible.map(f=>{
+    const subs=formSubmissions.filter(s=>s.form_id===f.id); const own=subs.find(s=>s.user_id===currentProfile.id); const hasFile=hasTemplateFileV5(f); const qCount=Array.isArray(f.questions)?f.questions.length:0; const directFields=templateFields(f).length; const builtIn=Boolean(f.built_in);
+    return `<div class="card form-card"><div class="form-card-head"><div><h3>${escapeHtml(f.title)}</h3><p>${escapeHtml(f.description||'')}</p></div><div class="badge-stack"><span class="badge ${f.published?'active':'inactive'}">${f.published?'Online':'Entwurf'}</span>${builtIn?'<span class="badge standard">Standardvorlage</span>':''}</div></div><p class="muted">${hasFile?'📎 PDF-Vorlage · ':''}${directFields?`<span class="form-editor-badge">✨ ${directFields} Felder automatisch erkannt</span> · `:''}${qCount} Zusatzfragen${currentProfile.role==='admin'?` · ${subs.length} Antworten`:own?' · Bereits gesendet':''}</p><div class="row-actions">${hasFile?`<button class="mini" data-open-form-file="${f.id}">Original öffnen</button>`:''}${currentProfile.role==='admin'&&visualTemplateSupported(f)?`<button class="btn primary" data-template-designer="${f.id}">✨ KI-Editor</button>`:''}<button class="btn primary" data-fill-form="${f.id}">${directFields?'Direkt ausfüllen':hasFile?'Ausfüllen':'Online ausfüllen'}</button>${currentProfile.role==='admin'?`${!builtIn?`<button class="mini" data-edit-form="${f.id}">Details</button>`:''}<button class="mini" data-submissions="${f.id}">Antworten (${subs.length})</button>${!builtIn?`<button class="mini bad" data-delete-form="${f.id}">Löschen</button>`:''}`:''}</div></div>`;
+  }).join(''):'<div class="card empty">Keine Formulare vorhanden.</div>'}</div>`;
+  const newBtn=$('#newOnlineForm'); if(newBtn)newBtn.onclick=()=>openOnlineFormDialog();
+  $$('[data-open-form-file]').forEach(btn=>btn.onclick=()=>openFormTemplateFile(btn.dataset.openFormFile));
+  $$('[data-template-designer]').forEach(btn=>btn.onclick=()=>openTemplateDesigner(btn.dataset.templateDesigner));
+  $$('[data-fill-form]').forEach(btn=>btn.onclick=()=>openFillForm(btn.dataset.fillForm));
+  $$('[data-edit-form]').forEach(btn=>btn.onclick=()=>openOnlineFormDialog(btn.dataset.editForm));
+  $$('[data-submissions]').forEach(btn=>btn.onclick=()=>showFormSubmissions(btn.dataset.submissions));
+  $$('[data-delete-form]').forEach(btn=>btn.onclick=()=>deleteOnlineForm(btn.dataset.deleteForm));
+}
+
+async function openFillForm(id) {
+  let form=forms.find(item=>item.id===id); if(!form)return;
+  try { const {data:fresh,error}=await sb.from('online_forms').select('*').eq('id',id).single(); if(!error&&fresh){form=fresh;const index=forms.findIndex(item=>item.id===id);if(index>=0)forms[index]=fresh;} } catch(_){}
+  if (visualTemplateSupported(form) && templateFields(form).length) { await openVisualTemplateFill(form); return; }
+  $('#fillFormId').value=form.id; $('#fillFormTitle').textContent=form.title; $('#fillFormDescription').textContent=form.description||''; $('#fillFormFile').value='';
+  const hasFile=hasTemplateFileV5(form); const template=$('#fillFormTemplate'); template.classList.toggle('hidden',!hasFile);
+  template.innerHTML=hasFile?`<div><b>Vorlage:</b> ${escapeHtml(form.file_name||'Formular')}</div><button id="openTemplateFromFill" type="button" class="btn ghost">Vorlage öffnen</button><p class="field-hint">Für diese Vorlage wurden noch keine direkten Felder gespeichert. Der Admin kann den KI-Editor öffnen.</p>`:'';
+  if(hasFile) $('#openTemplateFromFill').onclick=()=>openFormTemplateFile(form.id); $('#fillFormFileWrap').classList.toggle('hidden',!form.file_path);
+  $('#fillFormQuestions').innerHTML=(form.questions||[]).map((q,i)=>`<label>${escapeHtml(q)}<textarea data-form-answer="${i}" rows="2" required></textarea></label>`).join(''); $('#fillFormDialog').showModal();
+}
+
+async function deleteOnlineForm(id) {
+  const form=forms.find(x=>x.id===id); if(form?.built_in) return toast('Diese Standardvorlage bleibt fest im System.');
+  if(!confirm('Formular wirklich löschen? Auch Antworten werden gelöscht.'))return;
+  const subs=formSubmissions.filter(x=>x.form_id===id); const paths=[form?.file_path,...subs.map(x=>x.file_path)].filter(Boolean); if(paths.length)await sb.storage.from('forms').remove(paths);
+  const {error}=await sb.from('online_forms').delete().eq('id',id); if(error)return toast(error.message); await reloadAndRender('Formular wurde gelöscht.');
+}
+
 init().catch((error) => {
   console.error(error);
   toast(`Fehler: ${error.message}`);
